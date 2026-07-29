@@ -17,7 +17,8 @@ from core.migrations import run_migrations
 from core.models import DEFAULT_BRAND, Base, BrandProfile
 from core.retries import retry_on_sqlite_locked
 
-# Importing registers identity, session, audit, and credential tables on Base.metadata.
+# Importing registers security and operations tables on Base.metadata.
+import core.operations_models  # noqa: F401,E402
 import core.security_models  # noqa: F401,E402
 
 load_dotenv()
