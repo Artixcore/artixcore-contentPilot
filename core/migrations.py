@@ -61,6 +61,14 @@ TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "system_notifications",
     "integration_connections",
     "webhook_receipts",
+    "content_templates",
+    "campaign_items",
+    "lead_records",
+    "automation_rules",
+    "automation_runs",
+    "usage_events",
+    "oauth_authorization_states",
+    "brand_knowledge_documents",
 )
 
 for _table_name in TENANT_SCOPED_TABLES:
