@@ -26,7 +26,13 @@ def create_notification(
     action_page: str | None = None,
     deduplication_key: str | None = None,
     expires_in_hours: int | None = None,
+    commit: bool = True,
 ) -> SystemNotification:
+    """Create or update a notification.
+
+    Set commit=False when the notification must be committed atomically with a
+    surrounding business transaction. Existing callers retain commit=True.
+    """
     safe_severity = str(severity or "info").strip().lower()
     if safe_severity not in _SEVERITIES:
         raise ValidationAppError("Notification severity is invalid.")
@@ -69,8 +75,11 @@ def create_notification(
             existing.message = safe_message
             existing.severity = safe_severity
             existing.created_at = datetime.now(timezone.utc)
-            session.commit()
-            session.refresh(existing)
+            if commit:
+                session.commit()
+                session.refresh(existing)
+            else:
+                session.flush()
             return existing
 
     expires_at = None
@@ -89,8 +98,11 @@ def create_notification(
         expires_at=expires_at,
     )
     session.add(notification)
-    session.commit()
-    session.refresh(notification)
+    if commit:
+        session.commit()
+        session.refresh(notification)
+    else:
+        session.flush()
     return notification
 
 
