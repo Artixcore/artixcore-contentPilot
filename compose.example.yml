@@ -1,3 +1,4 @@
+# Local staging topology. Production should use a managed PostgreSQL service with TLS.
 services:
   postgres:
     image: postgres:16-alpine
@@ -26,7 +27,8 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Set a PostgreSQL DATABASE_URL with TLS settings}
+      APP_ENV: ${APP_ENV:-staging}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentpilot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-contentpilot}
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,7 +45,7 @@ services:
       - no-new-privileges:true
     networks:
       - contentpilot_internal
-      - contentpilot_proxy
+      - contentpilot_outbound
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8501/_stcore/health"]
       interval: 30s
@@ -58,7 +60,8 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Set a PostgreSQL DATABASE_URL with TLS settings}
+      APP_ENV: ${APP_ENV:-staging}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentpilot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-contentpilot}
       WORKER_ID: ${WORKER_ID:-contentpilot-worker}
       WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-2}
       WORKER_IDLE_SECONDS: ${WORKER_IDLE_SECONDS:-5}
@@ -76,6 +79,7 @@ services:
       - no-new-privileges:true
     networks:
       - contentpilot_internal
+      - contentpilot_outbound
 
 volumes:
   contentpilot_postgres:
@@ -84,4 +88,4 @@ volumes:
 networks:
   contentpilot_internal:
     internal: true
-  contentpilot_proxy:
+  contentpilot_outbound:
