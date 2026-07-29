@@ -32,9 +32,10 @@ def test_streamlit_security_defaults_are_enabled():
     assert "enableCORS = true" in config
     assert "enableXsrfProtection = true" in config
     assert "showErrorDetails = false" in config
+    assert "maxUploadSize = 20" in config
 
 
-def test_reverse_proxy_headers_cover_core_browser_controls():
+def test_reverse_proxy_headers_cover_browser_security_controls():
     headers = Path("deploy/nginx/security_headers.conf").read_text(encoding="utf-8")
     required = (
         "Strict-Transport-Security",
@@ -43,12 +44,32 @@ def test_reverse_proxy_headers_cover_core_browser_controls():
         "X-Frame-Options",
         "Referrer-Policy",
         "Permissions-Policy",
+        "Cross-Origin-Opener-Policy",
+        "Cross-Origin-Resource-Policy",
+        "X-Permitted-Cross-Domain-Policies",
+        "X-Robots-Tag",
+        "Cache-Control",
     )
     for header in required:
         assert header in headers
+
+    assert "frame-ancestors 'none'" in headers
+    assert "object-src 'none'" in headers
+    assert "connect-src 'self' wss: https:" in headers
+    assert "connect-src 'self' wss: ws:" not in headers
 
 
 def test_app_does_not_render_raw_exception_strings():
     source = Path("app.py").read_text(encoding="utf-8")
     assert "st.caption(str(exc))" not in source
     assert "handle_exception(exc" in source
+    assert "validate_startup_configuration()" in source
+    assert "session.rollback()" in source
+
+
+def test_production_safety_controls_are_documented():
+    environment = Path(".env.example").read_text(encoding="utf-8")
+    assert "APP_DEBUG=false" in environment
+    assert "ACCESS_CONTROL_MODE=" in environment
+    assert "HTTPS_TERMINATION_ENABLED=false" in environment
+    assert "ALERTS_ENABLED=false" in environment
