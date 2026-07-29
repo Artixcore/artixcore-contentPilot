@@ -17,9 +17,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models import Base, utc_now
+from core.tenancy_base import TenantScopedMixin
 
 
-class BackgroundJob(Base):
+class BackgroundJob(TenantScopedMixin, Base):
     __tablename__ = "background_jobs"
     __table_args__ = (
         CheckConstraint(
@@ -29,8 +30,18 @@ class BackgroundJob(Base):
         CheckConstraint("priority BETWEEN 0 AND 100", name="ck_background_jobs_priority"),
         CheckConstraint("attempts >= 0", name="ck_background_jobs_attempts"),
         CheckConstraint("max_attempts BETWEEN 1 AND 20", name="ck_background_jobs_max_attempts"),
-        Index("ix_background_jobs_claim", "status", "available_at", "priority", "created_at"),
-        Index("ix_background_jobs_type_status", "job_type", "status"),
+        UniqueConstraint(
+            "workspace_id", "idempotency_key", name="uq_background_jobs_workspace_idempotency"
+        ),
+        Index(
+            "ix_background_jobs_claim",
+            "workspace_id",
+            "status",
+            "available_at",
+            "priority",
+            "created_at",
+        ),
+        Index("ix_background_jobs_type_status", "workspace_id", "job_type", "status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -43,7 +54,7 @@ class BackgroundJob(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
-    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     requested_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     locked_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -60,14 +71,24 @@ class BackgroundJob(Base):
     )
 
 
-class SystemNotification(Base):
+class SystemNotification(TenantScopedMixin, Base):
     __tablename__ = "system_notifications"
     __table_args__ = (
         CheckConstraint(
             "severity IN ('info','success','warning','error','critical')",
             name="ck_system_notifications_severity",
         ),
-        Index("ix_system_notifications_unread", "recipient_user_id", "is_read", "created_at"),
+        UniqueConstraint(
+            "workspace_id", "recipient_user_id", "deduplication_key",
+            name="uq_notifications_workspace_recipient_dedup",
+        ),
+        Index(
+            "ix_system_notifications_unread",
+            "workspace_id",
+            "recipient_user_id",
+            "is_read",
+            "created_at",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -86,15 +107,17 @@ class SystemNotification(Base):
     )
 
 
-class IntegrationConnection(Base):
+class IntegrationConnection(TenantScopedMixin, Base):
     __tablename__ = "integration_connections"
     __table_args__ = (
-        UniqueConstraint("platform", "account_key", name="uq_integration_platform_account"),
+        UniqueConstraint(
+            "workspace_id", "platform", "account_key", name="uq_integration_workspace_account"
+        ),
         CheckConstraint(
             "status IN ('disconnected','connecting','connected','degraded','expired','disabled')",
             name="ck_integration_connections_status",
         ),
-        Index("ix_integration_connections_status", "status", "platform"),
+        Index("ix_integration_connections_status", "workspace_id", "status", "platform"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -119,15 +142,17 @@ class IntegrationConnection(Base):
     )
 
 
-class WebhookReceipt(Base):
+class WebhookReceipt(TenantScopedMixin, Base):
     __tablename__ = "webhook_receipts"
     __table_args__ = (
-        UniqueConstraint("provider", "event_id", name="uq_webhook_provider_event"),
+        UniqueConstraint(
+            "workspace_id", "provider", "event_id", name="uq_webhook_workspace_provider_event"
+        ),
         CheckConstraint(
             "status IN ('received','processing','processed','rejected','failed')",
             name="ck_webhook_receipts_status",
         ),
-        Index("ix_webhook_receipts_status_created", "status", "created_at"),
+        Index("ix_webhook_receipts_status_created", "workspace_id", "status", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
