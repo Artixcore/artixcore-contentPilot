@@ -2,8 +2,21 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from core.tenancy_base import TenantScopedMixin
 
 
 def utc_now() -> datetime:
@@ -14,8 +27,12 @@ class Base(DeclarativeBase):
     pass
 
 
-class BrandProfile(Base):
+class BrandProfile(TenantScopedMixin, Base):
     __tablename__ = "brand_profiles"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", name="uq_brand_profiles_workspace"),
+        Index("ix_brand_profiles_workspace_updated", "workspace_id", "updated_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     company_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -27,14 +44,22 @@ class BrandProfile(Base):
     services: Mapped[str] = mapped_column(Text, nullable=False)
     preferred_cta: Mapped[str] = mapped_column(Text, nullable=False)
     forbidden_style: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now, onupdate=utc_now
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 
-class Post(Base):
+class Post(TenantScopedMixin, Base):
     __tablename__ = "posts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft','pending_approval','approved','scheduled','published','rejected','failed')",
+            name="ck_posts_status",
+        ),
+        Index("ix_posts_workspace_status_created", "workspace_id", "status", "created_at"),
+        Index("ix_posts_workspace_scheduled", "workspace_id", "scheduled_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -50,19 +75,17 @@ class Post(Base):
     provider_used: Mapped[str | None] = mapped_column(String(50), nullable=True)
     model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)
     quality_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now, onupdate=utc_now
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
-
     external_post_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_post_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     published_by_platform: Mapped[str | None] = mapped_column(String(50), nullable=True)
     publish_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     publish_raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
-
     input_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_ai_response: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -75,34 +98,45 @@ class Post(Base):
     token_output_estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
     revision_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    parent_post_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parent_post_id: Mapped[int | None] = mapped_column(
+        ForeignKey("posts.id", ondelete="SET NULL"), nullable=True
+    )
     approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     rejected_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     manual_feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
     training_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
-class Campaign(Base):
+class Campaign(TenantScopedMixin, Base):
     __tablename__ = "campaigns"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft','active','paused','completed','archived')",
+            name="ck_campaigns_status",
+        ),
+        CheckConstraint("posts_per_week BETWEEN 1 AND 100", name="ck_campaigns_posts_per_week"),
+        Index("ix_campaigns_workspace_status", "workspace_id", "status"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     goal: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     platforms: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
-    start_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    end_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    end_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     posts_per_week: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now, onupdate=utc_now
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 
-class ProviderLog(Base):
+class ProviderLog(TenantScopedMixin, Base):
     __tablename__ = "provider_logs"
+    __table_args__ = (Index("ix_provider_logs_workspace_created", "workspace_id", "created_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -113,14 +147,17 @@ class ProviderLog(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     request_payload_sanitized: Mapped[str | None] = mapped_column(Text, nullable=True)
     response_payload_sanitized: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
-class PublishingLog(Base):
+class PublishingLog(TenantScopedMixin, Base):
     __tablename__ = "publishing_logs"
+    __table_args__ = (Index("ix_publishing_logs_workspace_post", "workspace_id", "post_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    post_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    post_id: Mapped[int] = mapped_column(
+        ForeignKey("posts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
     success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     external_post_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -128,14 +165,20 @@ class PublishingLog(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     request_payload_sanitized: Mapped[str | None] = mapped_column(Text, nullable=True)
     response_payload_sanitized: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
-class TrainingExample(Base):
+class TrainingExample(TenantScopedMixin, Base):
     __tablename__ = "training_examples"
+    __table_args__ = (
+        CheckConstraint("quality_score IS NULL OR quality_score BETWEEN 0 AND 100", name="ck_training_quality"),
+        Index("ix_training_workspace_approval", "workspace_id", "approval_status"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    post_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    post_id: Mapped[int] = mapped_column(
+        ForeignKey("posts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
     task_type: Mapped[str] = mapped_column(String(100), nullable=False, default="generate_post")
     input_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -147,24 +190,31 @@ class TrainingExample(Base):
     quality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     engagement_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     used_for_training: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now, onupdate=utc_now
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 
-class ContentEvent(Base):
+class ContentEvent(TenantScopedMixin, Base):
     __tablename__ = "content_events"
+    __table_args__ = (Index("ix_content_events_workspace_post", "workspace_id", "post_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    post_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    post_id: Mapped[int] = mapped_column(
+        ForeignKey("posts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     event_data: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
-class SocialAccount(Base):
+class SocialAccount(TenantScopedMixin, Base):
     __tablename__ = "social_accounts"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "platform", "account_id", name="uq_social_accounts_workspace"),
+        Index("ix_social_accounts_workspace_active", "workspace_id", "is_active"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -176,19 +226,27 @@ class SocialAccount(Base):
     refresh_token_encrypted_or_env_reference: Mapped[str | None] = mapped_column(
         String(255), nullable=True
     )
-    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now, onupdate=utc_now
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 
-class PostAnalytics(Base):
+class PostAnalytics(TenantScopedMixin, Base):
     __tablename__ = "post_analytics"
+    __table_args__ = (
+        Index("ix_post_analytics_workspace_post", "workspace_id", "post_id"),
+        CheckConstraint("impressions IS NULL OR impressions >= 0", name="ck_analytics_impressions"),
+        CheckConstraint("reach IS NULL OR reach >= 0", name="ck_analytics_reach"),
+        CheckConstraint("clicks IS NULL OR clicks >= 0", name="ck_analytics_clicks"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    post_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    post_id: Mapped[int] = mapped_column(
+        ForeignKey("posts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
     external_post_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     impressions: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -198,12 +256,13 @@ class PostAnalytics(Base):
     shares: Mapped[int | None] = mapped_column(Integer, nullable=True)
     clicks: Mapped[int | None] = mapped_column(Integer, nullable=True)
     engagement_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
-    captured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
-class ChatbotSettings(Base):
+class ChatbotSettings(TenantScopedMixin, Base):
     __tablename__ = "chatbot_settings"
+    __table_args__ = (UniqueConstraint("workspace_id", name="uq_chatbot_settings_workspace"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     chatbot_name: Mapped[str] = mapped_column(String(255), nullable=False, default="Artixcore Assistant")
@@ -223,14 +282,20 @@ class ChatbotSettings(Base):
     business_hours_start: Mapped[str | None] = mapped_column(String(10), nullable=True)
     business_hours_end: Mapped[str | None] = mapped_column(String(10), nullable=True)
     fallback_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now, onupdate=utc_now
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 
-class ChatConversation(Base):
+class ChatConversation(TenantScopedMixin, Base):
     __tablename__ = "chat_conversations"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "platform", "platform_conversation_id", name="uq_chat_conversations_external"
+        ),
+        Index("ix_chat_conversations_workspace_status", "workspace_id", "status"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -240,18 +305,21 @@ class ChatConversation(Base):
     user_profile_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="open")
     assigned_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now, onupdate=utc_now
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 
-class ChatMessage(Base):
+class ChatMessage(TenantScopedMixin, Base):
     __tablename__ = "chat_messages"
+    __table_args__ = (Index("ix_chat_messages_workspace_conversation", "workspace_id", "conversation_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    conversation_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
     platform_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sender_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -269,30 +337,40 @@ class ChatMessage(Base):
     parsed_ai_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     safety_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
     safety_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now, onupdate=utc_now
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 
-class ChatEvent(Base):
+class ChatEvent(TenantScopedMixin, Base):
     __tablename__ = "chat_events"
+    __table_args__ = (Index("ix_chat_events_workspace_conversation", "workspace_id", "conversation_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    conversation_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True
+    )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     event_data: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
-class ChatTrainingExample(Base):
+class ChatTrainingExample(TenantScopedMixin, Base):
     __tablename__ = "chat_training_examples"
+    __table_args__ = (Index("ix_chat_training_workspace_approval", "workspace_id", "approval_status"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    conversation_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False
+    )
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
     user_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -302,35 +380,39 @@ class ChatTrainingExample(Base):
     quality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     approval_status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
     used_for_training: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now, onupdate=utc_now
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 
-class TelegramAdmin(Base):
+class TelegramAdmin(TenantScopedMixin, Base):
     __tablename__ = "telegram_admins"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "telegram_user_id", name="uq_telegram_admin_workspace_user"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telegram_user_id: Mapped[str] = mapped_column(String(50), nullable=False)
     telegram_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now, onupdate=utc_now
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 
-class TelegramCommand(Base):
+class TelegramCommand(TenantScopedMixin, Base):
     __tablename__ = "telegram_commands"
+    __table_args__ = (Index("ix_telegram_commands_workspace_created", "workspace_id", "created_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telegram_user_id: Mapped[str] = mapped_column(String(50), nullable=False)
     command: Mapped[str] = mapped_column(String(100), nullable=False)
     payload: Mapped[str | None] = mapped_column(Text, nullable=True)
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 CHAT_CONVERSATION_STATUSES = (
