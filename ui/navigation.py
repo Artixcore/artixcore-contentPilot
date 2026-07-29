@@ -22,6 +22,7 @@ NAV_OPTIONS: list[tuple[str, str]] = [
     ("Publishing Settings", "publishing_settings"),
     ("Brand Settings", "brand_settings"),
     ("Exports", "exports"),
+    ("Operations", "operations"),
     ("User Management", "user_management"),
     ("Security", "security"),
 ]
@@ -42,6 +43,7 @@ PAGE_PERMISSIONS: dict[str, str] = {
     "Publishing Settings": "manage_integrations",
     "Brand Settings": "manage_brand",
     "Exports": "export_data",
+    "Operations": "manage_integrations",
     "User Management": "manage_users",
     "Security": "read",
 }
@@ -68,6 +70,7 @@ PAGE_SUBTITLES: dict[str, str] = {
     "publishing_settings": "Social platform connector status and encrypted credentials.",
     "brand_settings": "Configure the brand profile used for content generation.",
     "exports": "Download posts, training data, and activity logs.",
+    "operations": "Monitor jobs, integrations, webhook receipts, and operational failures.",
     "user_management": "Manage accounts, roles, and access status.",
     "security": "Manage password, MFA, encrypted credentials, sessions, and audit logs.",
 }
