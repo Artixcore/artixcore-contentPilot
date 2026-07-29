@@ -1,5 +1,7 @@
 """Artixcore ContentPilot Streamlit application entry point."""
 
+# ruff: noqa: E402
+
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -72,7 +74,9 @@ def _bootstrap_application() -> bool:
         return True
     except Exception as exc:
         _render_error(exc)
-        st.warning("ContentPilot stopped before serving the dashboard because startup checks failed.")
+        st.warning(
+            "ContentPilot stopped before serving the dashboard because startup checks failed."
+        )
         return False
 
 
