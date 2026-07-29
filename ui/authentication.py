@@ -65,13 +65,14 @@ def render_login(session: Session) -> None:
     user_count = int(session.scalar(select(func.count(UserAccount.id))) or 0)
     if user_count == 0:
         show_info(
-            "No owner account exists. Configure BOOTSTRAP_ADMIN_EMAIL and a secure bootstrap password secret, then restart the application."
+            "No owner account exists. Configure BOOTSTRAP_ADMIN_EMAIL and a secure "
+            "bootstrap password secret, then restart the application."
         )
         return
 
     with st.form("contentpilot_login", clear_on_submit=False):
-        email = st.text_input("Email", max_chars=320, autocomplete="email")
-        password = st.text_input("Password", type="password", max_chars=256, autocomplete="current-password")
+        email = st.text_input("Email", max_chars=320)
+        password = st.text_input("Password", type="password", max_chars=256)
         totp_code = st.text_input(
             "Authentication code",
             max_chars=8,
