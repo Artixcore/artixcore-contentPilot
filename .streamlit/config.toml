@@ -5,6 +5,18 @@ enableXsrfProtection = true
 maxUploadSize = 20
 maxMessageSize = 50
 
+# Production containers should not watch the repository or restart sessions when
+# files change. Avoiding unnecessary reload/reconnect churn also prevents browser
+# extensions from repeatedly rebuilding their injected provider streams.
+fileWatcherType = "none"
+runOnSave = false
+
+# Keep WebSocket sessions stable behind a correctly configured reverse proxy.
+# Streamlit recommends 30 seconds or greater with current Tornado versions.
+websocketPingInterval = 30
+disconnectedSessionTTL = 300
+enableWebsocketCompression = false
+
 [browser]
 gatherUsageStats = false
 
@@ -12,4 +24,6 @@ gatherUsageStats = false
 showErrorDetails = false
 
 [runner]
-fastReruns = true
+# Immediate reruns can create overlapping executions when session state changes.
+# Serialize reruns to reduce duplicate lifecycle work and race conditions.
+fastReruns = false
