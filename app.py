@@ -1,4 +1,6 @@
-"""Artixcore ContentPilot authenticated Streamlit application entry point."""
+"""Artixcore ContentPilot authenticated and tenant-isolated Streamlit entry point."""
+
+from __future__ import annotations
 
 # ruff: noqa: E402
 
@@ -11,9 +13,16 @@ load_dotenv()
 from core.auth import bootstrap_owner, require_permission
 from core.chat_database import seed_default_chatbot_settings
 from core.config_validation import validate_startup_configuration
-from core.database import get_session, init_db, seed_default_brand_profile
+from core.database import get_session, init_db, seed_default_brand_profile, set_session_workspace
 from core.error_handler import handle_exception
 from core.logging_config import setup_logging
+from core.tenant_migration import backfill_legacy_workspace
+from core.tenancy import (
+    WorkspaceContext,
+    bootstrap_default_tenant,
+    list_accessible_workspaces,
+    resolve_workspace,
+)
 from ui.ai_workspace import render_ai_workspace
 from ui.approvals import render_approvals
 from ui.authentication import current_user, render_login
@@ -34,33 +43,32 @@ from ui.security_settings import render_security_settings
 from ui.theme import init_theme
 from ui.training_data import render_training_data
 from ui.user_management import render_user_management
+from ui.workspaces import render_workspaces
 
 setup_logging()
 
 
 @st.cache_resource
 def bootstrap_database() -> bool:
+    """Initialize schema, owner, default tenant, legacy backfill, and scoped defaults."""
     init_db()
-    session = get_session()
+    session = get_session(tenant_bypass=True)
     try:
-        seed_default_brand_profile(session)
+        owner = bootstrap_owner(session)
+        if owner is None:
+            return True
+        workspace = bootstrap_default_tenant(session, owner)
+        backfill_legacy_workspace(session, workspace.workspace_id)
+        set_session_workspace(session, workspace)
+        seed_default_brand_profile(session, workspace=workspace)
         seed_default_chatbot_settings(session)
         session.commit()
-        bootstrap_owner(session)
         return True
     except Exception:
         session.rollback()
         raise
     finally:
         session.close()
-
-
-@st.cache_resource
-def start_telegram_controller() -> bool:
-    from chatbot.telegram_controller import start_telegram_polling
-
-    start_telegram_polling()
-    return True
 
 
 def _render_error(exc: BaseException) -> None:
@@ -78,7 +86,6 @@ def _bootstrap_application() -> bool:
     try:
         validate_startup_configuration()
         bootstrap_database()
-        start_telegram_controller()
         return True
     except Exception as exc:
         _render_error(exc)
@@ -88,11 +95,18 @@ def _bootstrap_application() -> bool:
         return False
 
 
-def _render_page(session, page: str, user) -> None:
+def _render_page(
+    session,
+    page: str,
+    user,
+    workspace: WorkspaceContext,
+) -> None:
     require_permission(user, permission_for_label(page))
 
     if page == "Dashboard":
         render_dashboard(session)
+    elif page == "Workspaces":
+        render_workspaces(session, user, workspace)
     elif page == "Notifications":
         render_notification_center(session, user)
     elif page == "AI Workspace":
@@ -129,7 +143,7 @@ def _render_page(session, page: str, user) -> None:
 
 
 def _authenticate_request():
-    auth_session = get_session()
+    auth_session = get_session(tenant_bypass=True)
     try:
         user = current_user(auth_session)
         if user is None:
@@ -141,6 +155,24 @@ def _authenticate_request():
         return None
     finally:
         auth_session.close()
+
+
+def _resolve_workspace_request(user) -> tuple[WorkspaceContext, list[WorkspaceContext]] | None:
+    tenant_session = get_session(tenant_bypass=True)
+    try:
+        requested = st.session_state.get("active_workspace_id")
+        workspace = resolve_workspace(tenant_session, user, requested)
+        available = list_accessible_workspaces(tenant_session, user)
+        if not any(item.workspace_id == workspace.workspace_id for item in available):
+            raise RuntimeError("Resolved workspace is not present in the user's membership list.")
+        st.session_state["active_workspace_id"] = workspace.workspace_id
+        return workspace, available
+    except Exception as exc:
+        tenant_session.rollback()
+        _render_error(exc)
+        return None
+    finally:
+        tenant_session.close()
 
 
 def main() -> None:
@@ -161,11 +193,16 @@ def main() -> None:
     if user is None:
         st.stop()
 
-    session = get_session()
+    resolved = _resolve_workspace_request(user)
+    if resolved is None:
+        st.stop()
+    workspace, available_workspaces = resolved
+
+    session = get_session(workspace)
     try:
-        page = render_sidebar(session, user)
-        render_topbar(user)
-        _render_page(session, page, user)
+        page = render_sidebar(session, user, workspace, available_workspaces)
+        render_topbar(user, workspace)
+        _render_page(session, page, user, workspace)
     except Exception as exc:
         session.rollback()
         _render_error(exc)
