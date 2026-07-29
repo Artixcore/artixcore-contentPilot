@@ -21,7 +21,6 @@ from core.chat_events import log_chat_event
 from core.database import get_brand_profile
 from core.models import ChatConversation, ChatMessage
 from core.errors import ChatbotError, ValidationAppError
-from core.load_manager import with_load_slot
 from core.rate_limiter import check_rate_limit
 from core.router import ProviderRouter
 
@@ -101,14 +100,13 @@ class ArtixcoreChatbotAgent:
         input_prompt = build_input_prompt(user_message, history)
 
         try:
-            with with_load_slot("ai"):
-                result = self.router.generate(
-                    prompt=input_prompt,
-                    system_prompt=system_prompt,
-                    mode=provider_mode,
-                    selected_provider=selected_provider,
-                    task_type="chatbot_reply",
-                )
+            result = self.router.generate(
+                prompt=input_prompt,
+                system_prompt=system_prompt,
+                mode=provider_mode,
+                selected_provider=selected_provider,
+                task_type="chatbot_reply",
+            )
         except Exception as exc:
             msg = getattr(exc, "message", str(exc))
             raise ChatbotError(msg, original_exception=exc) from exc
