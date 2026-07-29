@@ -75,41 +75,16 @@ def verify_tenant_integrity(session: Session) -> None:
                 problems.append(f"{table_name}:unassigned={int(unassigned or 0)}")
 
         relationship_checks = (
-            (
-                "publishing_logs",
-                "posts",
-                "post_id",
-            ),
-            (
-                "training_examples",
-                "posts",
-                "post_id",
-            ),
-            (
-                "content_events",
-                "posts",
-                "post_id",
-            ),
-            (
-                "post_analytics",
-                "posts",
-                "post_id",
-            ),
-            (
-                "chat_messages",
-                "chat_conversations",
-                "conversation_id",
-            ),
-            (
-                "chat_events",
-                "chat_conversations",
-                "conversation_id",
-            ),
-            (
-                "chat_training_examples",
-                "chat_conversations",
-                "conversation_id",
-            ),
+            ("publishing_logs", "posts", "post_id"),
+            ("training_examples", "posts", "post_id"),
+            ("content_events", "posts", "post_id"),
+            ("post_analytics", "posts", "post_id"),
+            ("chat_messages", "chat_conversations", "conversation_id"),
+            ("chat_events", "chat_conversations", "conversation_id"),
+            ("chat_training_examples", "chat_conversations", "conversation_id"),
+            ("campaign_items", "campaigns", "campaign_id"),
+            ("campaign_items", "posts", "post_id"),
+            ("automation_runs", "automation_rules", "rule_id"),
         )
         for child, parent, foreign_key in relationship_checks:
             if child not in existing_tables or parent not in existing_tables:
