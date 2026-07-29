@@ -1,4 +1,4 @@
-"""Encrypted integration credential storage with rotation and audit trails."""
+"""Encrypted integration credential storage with workspace-bound rotation and audit trails."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from core.audit import log_audit_event
 from core.auth import AuthenticatedUser, require_permission
-from core.encryption import decrypt_text, encrypt_text, rotate_ciphertext
+from core.encryption import decrypt_text, encrypt_text
 from core.errors import ValidationAppError
 from core.security_models import EncryptedCredential
 from core.validation import normalize_text
@@ -29,6 +29,49 @@ def _normalize_name(value: object) -> str:
             "Credential names may contain lowercase letters, numbers, dots, underscores, and hyphens."
         )
     return name
+
+
+def _workspace_id(session: Session) -> int | None:
+    value = session.info.get("workspace_id")
+    return int(value) if value is not None else None
+
+
+def _context(session: Session, clean_name: str) -> str:
+    workspace_id = _workspace_id(session)
+    return (
+        f"credential:{workspace_id}:{clean_name}"
+        if workspace_id is not None
+        else f"credential:{clean_name}"
+    )
+
+
+def _decrypt_compatible(
+    session: Session,
+    model: EncryptedCredential,
+    *,
+    migrate: bool,
+) -> str:
+    current_context = _context(session, model.credential_name)
+    legacy_context = f"credential:{model.credential_name}"
+    contexts = [current_context]
+    if legacy_context != current_context:
+        contexts.append(legacy_context)
+    last_error: Exception | None = None
+    for context in contexts:
+        try:
+            value = decrypt_text(model.ciphertext, associated_context=context)
+            if migrate and context != current_context:
+                encrypted = encrypt_text(value, associated_context=current_context)
+                model.ciphertext = encrypted.ciphertext
+                model.key_id = encrypted.key_id
+                model.version = int(model.version or 0) + 1
+                model.rotated_at = datetime.now(timezone.utc)
+            return value
+        except Exception as exc:
+            last_error = exc
+    raise ValidationAppError(
+        "Credential could not be decrypted with the configured workspace encryption context."
+    ) from last_error
 
 
 def list_credential_metadata(
@@ -66,8 +109,7 @@ def store_credential(
     if not 8 <= len(secret) <= 100_000:
         raise ValidationAppError("Credential value must contain between 8 and 100,000 characters.")
 
-    context = f"credential:{clean_name}"
-    encrypted = encrypt_text(secret, associated_context=context)
+    encrypted = encrypt_text(secret, associated_context=_context(session, clean_name))
     model = session.scalar(
         select(EncryptedCredential).where(
             EncryptedCredential.credential_name == clean_name
@@ -134,7 +176,7 @@ def reveal_credential(
     )
     if model is None:
         raise ValidationAppError("Credential was not found or is inactive.")
-    value = decrypt_text(model.ciphertext, associated_context=f"credential:{clean_name}")
+    value = _decrypt_compatible(session, model, migrate=True)
     log_audit_event(
         session,
         action="credential.revealed",
@@ -163,10 +205,8 @@ def rotate_credential_key(
     )
     if model is None:
         raise ValidationAppError("Credential was not found.")
-    encrypted = rotate_ciphertext(
-        model.ciphertext,
-        associated_context=f"credential:{clean_name}",
-    )
+    plaintext = _decrypt_compatible(session, model, migrate=False)
+    encrypted = encrypt_text(plaintext, associated_context=_context(session, clean_name))
     model.ciphertext = encrypted.ciphertext
     model.key_id = encrypted.key_id
     model.version = int(model.version or 0) + 1
