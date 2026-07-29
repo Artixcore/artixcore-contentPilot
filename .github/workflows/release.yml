@@ -22,14 +22,16 @@ env:
 
 jobs:
   verify:
-    name: Verify release source
+    name: Verify complete release source
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       APP_ENV: test
       APP_DEBUG: "false"
       ALERTS_ENABLED: "false"
       DATABASE_URL: sqlite:///:memory:
+      CONTENTPILOT_ENCRYPTION_KEYS: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      WORKSPACE_API_KEY_PEPPER: release-workspace-api-key-pepper-32-characters
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,20 +51,26 @@ jobs:
       - name: Verify dependencies
         run: python -m pip check
 
-      - name: Compile source
-        run: python -m compileall -q app.py core chatbot providers publishers ui tests scripts
+      - name: Compile complete source
+        run: python -m compileall -q app.py app_complete.py core chatbot providers publishers ui workers tests scripts
 
       - name: Check likely runtime errors
-        run: ruff check app.py core chatbot providers publishers ui tests scripts --select E9,F63,F7,F82
+        run: ruff check app.py app_complete.py core chatbot providers publishers ui workers tests scripts --select E9,F63,F7,F82
 
-      - name: Run tests
+      - name: Run complete tests
         run: pytest -q --maxfail=1
 
-      - name: Scan application code
-        run: bandit -r app.py core chatbot providers publishers ui -x tests -ll --skip B101
+      - name: Scan complete application code
+        run: bandit -r app.py app_complete.py core chatbot providers publishers ui workers -x tests -ll --skip B101
 
-      - name: Audit declared Python dependencies
-        run: pip-audit --requirement requirements.txt --strict
+      - name: Audit declared dependencies
+        run: pip-audit --strict --requirement requirements.txt
+
+      - name: Build release candidate image
+        run: docker build --tag contentpilot:release-candidate .
+
+      - name: Verify complete entrypoint is present
+        run: docker run --rm --entrypoint python contentpilot:release-candidate -m compileall -q app_complete.py core ui workers
 
   publish:
     name: Publish verified image
@@ -96,7 +104,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
           labels: |
             org.opencontainers.image.title=Artixcore ContentPilot
-            org.opencontainers.image.description=AI content and social engagement platform
+            org.opencontainers.image.description=Tenant-isolated AI content and social engagement platform
             org.opencontainers.image.vendor=Artixcore
 
       - name: Build and publish image
