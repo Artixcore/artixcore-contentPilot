@@ -9,18 +9,17 @@ from core.auth import ROLE_OWNER, ROLE_VIEWER, create_user
 from core.models import Post
 from core.tenant_migration import backfill_legacy_workspace, verify_tenant_integrity
 from core.tenant_models import WorkspaceMembership
+from core.tenant_runtime import bind_workspace
 from core.tenancy import (
     WorkspaceAccessError,
     accept_invitation,
     bootstrap_default_tenant,
     create_organization,
-    create_workspace_api_key,
     invite_member,
     list_accessible_workspaces,
     resolve_workspace,
-    set_session_workspace,
-    verify_workspace_api_key,
 )
+from core.workspace_api_keys import create_workspace_api_key, verify_workspace_api_key
 
 
 def _owner(db_session):
@@ -37,7 +36,7 @@ def _bootstrap(db_session):
     owner = _owner(db_session)
     context = bootstrap_default_tenant(db_session, owner)
     backfill_legacy_workspace(db_session, context.workspace_id)
-    set_session_workspace(db_session, context)
+    bind_workspace(db_session, context)
     return owner, context
 
 
@@ -71,7 +70,7 @@ def test_automatic_assignment_and_read_isolation(db_session):
         workspace_name="Second Workspace",
         workspace_slug="second-workspace",
     )
-    set_session_workspace(db_session, second)
+    bind_workspace(db_session, second)
     assert db_session.scalar(select(Post).where(Post.id == post.id)) is None
 
     second_post = Post(platform="facebook", topic="Workspace two", status="draft")
@@ -79,7 +78,7 @@ def test_automatic_assignment_and_read_isolation(db_session):
     db_session.commit()
     assert second_post.workspace_id == second.workspace_id
 
-    set_session_workspace(db_session, first)
+    bind_workspace(db_session, first)
     visible = list(db_session.scalars(select(Post).order_by(Post.id)).all())
     assert [item.id for item in visible] == [post.id]
 
@@ -101,13 +100,13 @@ def test_cross_workspace_update_is_blocked(db_session):
     db_session.info["tenant_bypass"] = True
     loaded = db_session.get(Post, post.id)
     db_session.info["tenant_bypass"] = False
-    set_session_workspace(db_session, second)
+    bind_workspace(db_session, second)
     loaded.topic = "Forbidden cross-tenant change"
     with pytest.raises(WorkspaceAccessError):
         db_session.commit()
     db_session.rollback()
 
-    set_session_workspace(db_session, first)
+    bind_workspace(db_session, first)
     original = db_session.get(Post, post.id)
     assert original.topic == "Protected"
 
@@ -145,6 +144,7 @@ def test_workspace_api_keys_are_hashed_scoped_and_authorized(db_session):
         scopes=["content:read", "content:write"],
         expires_days=30,
     )
+    assert "." in result.api_key
     assert result.api_key not in result.model.key_hash
     resolved = verify_workspace_api_key(db_session, result.api_key, "content:read")
     assert resolved.workspace_id == context.workspace_id
