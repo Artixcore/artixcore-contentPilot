@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 NAV_OPTIONS: list[tuple[str, str]] = [
     ("Dashboard", "dashboard"),
+    ("Workspaces", "workspaces"),
     ("Notifications", "notifications"),
     ("AI Workspace", "ai_workspace"),
     ("Create Post", "create_post"),
@@ -33,6 +34,7 @@ NAV_KEYS = [key for _, key in NAV_OPTIONS]
 
 PAGE_PERMISSIONS: dict[str, str] = {
     "Dashboard": "read",
+    "Workspaces": "read",
     "Notifications": "read",
     "AI Workspace": "create_content",
     "Create Post": "create_content",
@@ -50,31 +52,25 @@ PAGE_PERMISSIONS: dict[str, str] = {
     "Security": "read",
 }
 
-SIDEBAR_WORKSPACES: list[str] = [
-    "Artixcore",
-    "Dealzyro",
-    "Digitalplanup",
-    "General",
-]
-
 PAGE_LABELS: dict[str, str] = {key: label for label, key in NAV_OPTIONS}
 
 PAGE_SUBTITLES: dict[str, str] = {
-    "dashboard": "Overview of your content pipeline, chatbot activity, publishing connectors, and system health.",
+    "dashboard": "Overview of the active workspace content pipeline, publishing, and system health.",
+    "workspaces": "Manage organizations, workspace settings, members, invitations, and API keys.",
     "notifications": "Review operational alerts, failed jobs, and integration notices.",
     "ai_workspace": "Ask ContentPilot to create, reply, plan, or publish.",
     "create_post": "Generate content for a selected platform.",
     "approvals": "Review, edit, approve, or reject pending content.",
     "chat_inbox": "Review conversations, approve replies, and simulate incoming messages.",
-    "chat_control": "Configure and monitor the Artixcore chatbot.",
+    "chat_control": "Configure and monitor the workspace chatbot.",
     "publish_center": "Publish approved or scheduled posts with confirmation.",
     "training_data": "Manage training examples and brand-learning data.",
     "provider_settings": "Provider status and configuration.",
     "publishing_settings": "Social platform connector status and encrypted credentials.",
-    "brand_settings": "Configure the brand profile used for content generation.",
-    "exports": "Download posts, training data, and activity logs.",
-    "operations": "Monitor jobs, integrations, webhook receipts, and operational failures.",
-    "user_management": "Manage accounts, roles, and access status.",
+    "brand_settings": "Configure the workspace brand profile used for content generation.",
+    "exports": "Download workspace posts, training data, and activity logs.",
+    "operations": "Monitor workspace jobs, integrations, webhook receipts, and failures.",
+    "user_management": "Manage global accounts, roles, and access status.",
     "security": "Manage password, MFA, encrypted credentials, sessions, and audit logs.",
 }
 
@@ -82,8 +78,6 @@ PAGE_SUBTITLES: dict[str, str] = {
 def init_navigation() -> None:
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
-    if "active_workspace" not in st.session_state:
-        st.session_state.active_workspace = "Artixcore"
 
 
 def available_labels(user: "AuthenticatedUser") -> list[str]:
