@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+import json
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import case, func, select
@@ -129,7 +130,12 @@ def get_analytics_summary(
         select(
             func.count(LeadRecord.id),
             func.coalesce(
-                func.sum(case((LeadRecord.status.in_(("qualified", "contacted", "proposal", "won")), 1), else_=0)),
+                func.sum(
+                    case(
+                        (LeadRecord.status.in_(("qualified", "contacted", "proposal", "won")), 1),
+                        else_=0,
+                    )
+                ),
                 0,
             ),
             func.coalesce(func.sum(case((LeadRecord.status == "won", 1), else_=0)), 0),
@@ -141,7 +147,9 @@ def get_analytics_summary(
         select(
             func.coalesce(func.sum(case((BackgroundJob.status == "succeeded", 1), else_=0)), 0),
             func.coalesce(
-                func.sum(case((BackgroundJob.status.in_(("failed", "dead_letter")), 1), else_=0)),
+                func.sum(
+                    case((BackgroundJob.status.in_(("failed", "dead_letter")), 1), else_=0)
+                ),
                 0,
             ),
         ).where(BackgroundJob.created_at >= start_utc, BackgroundJob.created_at <= end_utc)
@@ -151,7 +159,10 @@ def get_analytics_summary(
     usage_row = session.execute(
         select(
             func.coalesce(func.sum(UsageEvent.quantity), 0),
-            func.coalesce(func.sum(UsageEvent.quantity * func.coalesce(UsageEvent.unit_cost, 0.0)), 0.0),
+            func.coalesce(
+                func.sum(UsageEvent.quantity * func.coalesce(UsageEvent.unit_cost, 0.0)),
+                0.0,
+            ),
         ).where(UsageEvent.created_at >= start_utc, UsageEvent.created_at <= end_utc)
     ).one()
     usage_quantity = int(usage_row[0] or 0)
