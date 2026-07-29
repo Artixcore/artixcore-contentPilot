@@ -98,6 +98,9 @@ jobs:
       - name: Initialize and verify PostgreSQL schema
         run: python scripts/ci_database_smoke.py
 
+      - name: Verify worker startup against PostgreSQL
+        run: python -m workers.runner --once
+
   security:
     name: Security scans
     runs-on: ubuntu-latest
@@ -124,13 +127,13 @@ jobs:
           python -m pip install bandit pip-audit
 
       - name: Scan Python code
-        run: bandit -r app.py core chatbot providers publishers ui workers -x tests -ll --skip B101
+        run: bandit -r app.py core chatbot providers publishers ui workers scripts -x tests -ll --skip B101
 
       - name: Audit declared Python dependencies
         run: pip-audit --requirement requirements.txt --strict
 
   container:
-    name: Container build and smoke test
+    name: Container and topology smoke tests
     runs-on: ubuntu-latest
     timeout-minutes: 25
     needs: [test, postgres, security]
@@ -138,12 +141,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate compose topology
+      - name: Validate Compose topology
         env:
           POSTGRES_PASSWORD: contentpilot_ci_password
+          APP_ENV: test
         run: |
           cp .env.example .env
-          docker compose -f compose.example.yml config >/dev/null
+          docker compose -f compose.example.yml config --quiet
           rm -f .env
 
       - name: Set up Docker Buildx
@@ -159,7 +163,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Start hardened container
+      - name: Verify worker image startup
+        run: |
+          docker run --rm \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --env APP_ENV=test \
+            --env APP_DEBUG=false \
+            --env ALERTS_ENABLED=false \
+            --env DATABASE_URL=sqlite:////tmp/contentpilot-worker-ci.db \
+            contentpilot:ci python -m workers.runner --once
+
+      - name: Start hardened web container
         run: |
           docker run --detach \
             --name contentpilot-ci \
