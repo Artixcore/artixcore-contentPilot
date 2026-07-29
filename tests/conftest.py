@@ -7,23 +7,44 @@ import core.database as db_module
 from core.chat_database import seed_default_chatbot_settings
 from core.database import get_session, init_db, reset_engine, seed_default_brand_profile
 
+_TEST_FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+_TEST_API_PEPPER = "contentpilot-test-api-key-pepper-32-characters-minimum"
+
 
 @pytest.fixture(autouse=True)
 def isolate_env(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("TELEGRAM_ADMIN_IDS", raising=False)
-    monkeypatch.delenv("META_PAGE_ACCESS_TOKEN", raising=False)
-    monkeypatch.delenv("X_ACCESS_TOKEN", raising=False)
+    for key in (
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_ADMIN_IDS",
+        "TELEGRAM_ALERT_CHAT_IDS",
+        "META_PAGE_ACCESS_TOKEN",
+        "X_ACCESS_TOKEN",
+        "BOOTSTRAP_ADMIN_EMAIL",
+        "BOOTSTRAP_ADMIN_PASSWORD",
+        "BOOTSTRAP_ADMIN_PASSWORD_HASH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("APP_DEBUG", "false")
+    monkeypatch.setenv("ALERTS_ENABLED", "false")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("CONTENTPILOT_ENCRYPTION_KEYS", _TEST_FERNET_KEY)
+    monkeypatch.setenv("WORKSPACE_API_KEY_PEPPER", _TEST_API_PEPPER)
+    monkeypatch.setenv("AUTH_SESSION_HOURS", "8")
+    monkeypatch.setenv("AUTH_MAX_FAILED_LOGINS", "5")
+    monkeypatch.setenv("AUTH_LOCK_MINUTES", "15")
 
 
 @pytest.fixture
 def db_session() -> Session:
     reset_engine("sqlite:///:memory:")
     init_db()
-    session = get_session()
+    # Legacy tests exercise individual services before a tenant is created.
+    # Explicit bypass keeps those tests isolated while dedicated tenant tests
+    # validate the fail-closed workspace boundary.
+    session = get_session(tenant_bypass=True)
     seed_default_brand_profile(session)
     seed_default_chatbot_settings(session)
     session.commit()

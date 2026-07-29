@@ -1,0 +1,91 @@
+# Local staging topology. Production should use a managed PostgreSQL service with TLS.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-contentpilot}
+      POSTGRES_USER: ${POSTGRES_USER:-contentpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment environment}
+    volumes:
+      - contentpilot_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - contentpilot_internal
+    security_opt:
+      - no-new-privileges:true
+
+  app:
+    build:
+      context: .
+    image: ${CONTENTPILOT_IMAGE:-contentpilot:local}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: ${APP_ENV:-staging}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentpilot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-contentpilot}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${CONTENTPILOT_PORT:-8501}:8501"
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    volumes:
+      - contentpilot_logs:/app/logs
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - contentpilot_internal
+      - contentpilot_outbound
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8501/_stcore/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    image: ${CONTENTPILOT_IMAGE:-contentpilot:local}
+    restart: unless-stopped
+    command: ["python", "-m", "workers.runner"]
+    env_file:
+      - .env
+    environment:
+      APP_ENV: ${APP_ENV:-staging}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentpilot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-contentpilot}
+      WORKER_ID: ${WORKER_ID:-contentpilot-worker}
+      WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-2}
+      WORKER_IDLE_SECONDS: ${WORKER_IDLE_SECONDS:-5}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    volumes:
+      - contentpilot_logs:/app/logs
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - contentpilot_internal
+      - contentpilot_outbound
+
+volumes:
+  contentpilot_postgres:
+  contentpilot_logs:
+
+networks:
+  contentpilot_internal:
+    internal: true
+  contentpilot_outbound:

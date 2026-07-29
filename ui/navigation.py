@@ -1,11 +1,21 @@
-"""Navigation state helpers."""
+"""Navigation state helpers with global and workspace permissions."""
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import streamlit as st
+
+from core.workspace_permissions import can_access
+
+if TYPE_CHECKING:
+    from core.auth import AuthenticatedUser
+    from core.tenancy import WorkspaceContext
 
 NAV_OPTIONS: list[tuple[str, str]] = [
     ("Dashboard", "dashboard"),
+    ("Workspaces", "workspaces"),
+    ("Notifications", "notifications"),
     ("AI Workspace", "ai_workspace"),
     ("Create Post", "create_post"),
     ("Approvals", "approvals"),
@@ -17,41 +27,75 @@ NAV_OPTIONS: list[tuple[str, str]] = [
     ("Publishing Settings", "publishing_settings"),
     ("Brand Settings", "brand_settings"),
     ("Exports", "exports"),
+    ("Operations", "operations"),
+    ("User Management", "user_management"),
+    ("Security", "security"),
 ]
 
 NAV_LABELS = [label for label, _ in NAV_OPTIONS]
 NAV_KEYS = [key for _, key in NAV_OPTIONS]
 
-SIDEBAR_WORKSPACES: list[str] = [
-    "Artixcore",
-    "Dealzyro",
-    "Digitalplanup",
-    "General",
-]
+PAGE_PERMISSIONS: dict[str, str] = {
+    "Dashboard": "read",
+    "Workspaces": "read",
+    "Notifications": "read",
+    "AI Workspace": "create_content",
+    "Create Post": "create_content",
+    "Approvals": "approve_content",
+    "Chat Inbox": "manage_chatbot",
+    "Chat Control": "manage_chatbot",
+    "Publish Center": "publish_content",
+    "Training Data": "edit_content",
+    "Provider Settings": "manage_integrations",
+    "Publishing Settings": "manage_integrations",
+    "Brand Settings": "manage_brand",
+    "Exports": "export_data",
+    "Operations": "manage_integrations",
+    "User Management": "manage_users",
+    "Security": "read",
+}
 
 PAGE_LABELS: dict[str, str] = {key: label for label, key in NAV_OPTIONS}
 
 PAGE_SUBTITLES: dict[str, str] = {
-    "dashboard": "Overview of your content pipeline, chatbot activity, publishing connectors, and system health.",
+    "dashboard": "Overview of the active workspace content pipeline, publishing, and system health.",
+    "workspaces": "Manage organizations, workspace settings, members, invitations, and API keys.",
+    "notifications": "Review operational alerts, failed jobs, and integration notices.",
     "ai_workspace": "Ask ContentPilot to create, reply, plan, or publish.",
-    "create_post": "Generate AI-powered content for your selected platform.",
-    "approvals": "Review, edit, approve, or reject pending content. No auto-publishing.",
-    "chat_inbox": "Review conversations, approve AI replies, and simulate incoming messages.",
-    "chat_control": "Configure and monitor the Artixcore AI chatbot.",
-    "publish_center": "Publish approved or scheduled posts. Human confirmation required.",
-    "training_data": "Manage training examples for fine-tuning, RAG, and brand learning.",
-    "provider_settings": "AI provider status and configuration.",
-    "publishing_settings": "Social platform connector status. Tokens loaded from `.env`.",
-    "brand_settings": "Configure the Artixcore brand profile used for content generation.",
-    "exports": "Download posts, training data, and activity logs.",
+    "create_post": "Generate content for a selected platform.",
+    "approvals": "Review, edit, approve, or reject pending content.",
+    "chat_inbox": "Review conversations, approve replies, and simulate incoming messages.",
+    "chat_control": "Configure and monitor the workspace chatbot.",
+    "publish_center": "Publish approved or scheduled posts with confirmation.",
+    "training_data": "Manage training examples and brand-learning data.",
+    "provider_settings": "Provider status and configuration.",
+    "publishing_settings": "Social platform connector status and encrypted credentials.",
+    "brand_settings": "Configure the workspace brand profile used for content generation.",
+    "exports": "Download workspace posts, training data, and activity logs.",
+    "operations": "Monitor workspace jobs, integrations, webhook receipts, and failures.",
+    "user_management": "Manage global accounts, roles, and access status.",
+    "security": "Manage password, MFA, encrypted credentials, sessions, and audit logs.",
 }
 
 
 def init_navigation() -> None:
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
-    if "active_workspace" not in st.session_state:
-        st.session_state.active_workspace = "Artixcore"
+
+
+def available_labels(
+    user: "AuthenticatedUser",
+    workspace: "WorkspaceContext",
+) -> list[str]:
+    return [
+        label
+        for label, _ in NAV_OPTIONS
+        if can_access(user, workspace, PAGE_PERMISSIONS.get(label, "read"))
+    ]
+
+
+def permission_for_label(label: str) -> str:
+    return PAGE_PERMISSIONS.get(label, "read")
 
 
 def navigate(page_label: str) -> None:

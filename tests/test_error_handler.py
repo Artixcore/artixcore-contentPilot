@@ -1,26 +1,28 @@
 """Tests for core.error_handler."""
 
-import os
+import importlib
 
-import pytest
-
-from core.error_handler import (
-    format_user_error,
-    handle_exception,
-    is_retryable_error,
-    safe_error_message,
-)
 from core.errors import AppError, RateLimitError, ValidationAppError
 from core.utils import sanitize_text
 
 
-def test_formats_app_error():
-    err = AppError("Something failed", reason="Test reason", error_code="TEST")
-    result = format_user_error(err)
+def _reload_error_handler(monkeypatch, *, app_env: str, debug: str = "false"):
+    monkeypatch.setenv("APP_ENV", app_env)
+    monkeypatch.setenv("APP_DEBUG", debug)
+    import core.error_handler as error_handler
+
+    return importlib.reload(error_handler)
+
+
+def test_formats_public_validation_error(monkeypatch):
+    error_handler = _reload_error_handler(monkeypatch, app_env="test")
+    err = ValidationAppError("Invalid value", reason="The field is invalid.")
+    result = error_handler.format_user_error(err)
+
     assert result["success"] is False
-    assert result["message"] == "Something failed"
-    assert result["reason"] == "Test reason"
-    assert result["error_code"] == "TEST"
+    assert result["message"] == "Invalid value"
+    assert result["reason"] == "The field is invalid."
+    assert result["error_code"] == "VALIDATION_ERROR"
 
 
 def test_sanitizes_secrets():
@@ -30,40 +32,62 @@ def test_sanitizes_secrets():
     assert "secret-token" not in cleaned
 
 
-def test_hides_traceback_in_production(monkeypatch):
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("APP_DEBUG", "false")
-    import importlib
-    import core.error_handler as eh
+def test_hides_traceback_and_internal_reason_in_production(monkeypatch):
+    error_handler = _reload_error_handler(monkeypatch, app_env="production", debug="false")
+    result = error_handler.format_user_error(ValueError("database password=secret-value"))
 
-    importlib.reload(eh)
-    result = eh.format_user_error(ValueError("boom"))
+    assert "traceback" not in result
+    assert "secret-value" not in result["reason"]
+    assert result["metadata"] == {}
+    assert result["error_code"] == "UNEXPECTED_ERROR"
+
+
+def test_debug_flag_does_not_enable_traceback_outside_development(monkeypatch):
+    error_handler = _reload_error_handler(monkeypatch, app_env="production", debug="true")
+    result = error_handler.format_user_error(ValueError("boom"))
     assert "traceback" not in result
 
 
-def test_shows_traceback_in_development(monkeypatch):
-    monkeypatch.setenv("APP_ENV", "development")
-    monkeypatch.setenv("APP_DEBUG", "false")
-    import importlib
-    import core.error_handler as eh
+def test_development_requires_explicit_debug_for_traceback(monkeypatch):
+    error_handler = _reload_error_handler(monkeypatch, app_env="development", debug="false")
+    assert "traceback" not in error_handler.format_user_error(ValueError("boom"))
 
-    importlib.reload(eh)
-    result = eh.format_user_error(ValueError("boom"))
-    assert "traceback" in result
+    error_handler = _reload_error_handler(monkeypatch, app_env="development", debug="true")
+    assert "traceback" in error_handler.format_user_error(ValueError("boom"))
 
 
-def test_marks_retryable_errors():
-    assert is_retryable_error(RateLimitError()) is True
-    assert is_retryable_error(ValidationAppError("bad input")) is False
+def test_marks_retryable_errors(monkeypatch):
+    error_handler = _reload_error_handler(monkeypatch, app_env="test")
+    assert error_handler.is_retryable_error(RateLimitError()) is True
+    assert error_handler.is_retryable_error(ValidationAppError("bad input")) is False
 
 
-def test_handle_exception_structure():
-    result = handle_exception(ValidationAppError("Invalid"), context="test")
+def test_handle_exception_structure(monkeypatch):
+    monkeypatch.setenv("ALERTS_ENABLED", "false")
+    error_handler = _reload_error_handler(monkeypatch, app_env="test")
+    result = error_handler.handle_exception(ValidationAppError("Invalid"), context="test")
+
     assert result["success"] is False
     assert result["retryable"] is False
-    assert "message" in result
+    assert result["message"] == "Invalid"
 
 
-def test_safe_error_message():
-    msg = safe_error_message(AppError("User message"))
-    assert msg == "User message"
+def test_safe_error_message(monkeypatch):
+    error_handler = _reload_error_handler(monkeypatch, app_env="test")
+    assert error_handler.safe_error_message(AppError("User message")) == "User message"
+
+
+def test_legacy_publish_error_mapping_does_not_raise_name_error(monkeypatch):
+    error_handler = _reload_error_handler(monkeypatch, app_env="test")
+    from core.publishing import PublishError
+
+    result = error_handler.format_user_error(PublishError("Publish failed"))
+    assert result["error_code"] == "PUBLISHING_ERROR"
+
+
+def test_legacy_chatbot_error_mapping_does_not_raise_name_error(monkeypatch):
+    error_handler = _reload_error_handler(monkeypatch, app_env="test")
+    from chatbot.chatbot_agent import ChatbotAgentError
+
+    result = error_handler.format_user_error(ChatbotAgentError("Chat failed"))
+    assert result["error_code"] == "CHATBOT_ERROR"
