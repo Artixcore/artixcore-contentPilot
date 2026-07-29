@@ -1,2 +1,4 @@
 2026-07-30 01:30:32 INFO core.logging_config: Logging initialized (level=INFO, file=D:\artixcore-contentPilot\logs\contentpilot.log)
 2026-07-30 01:30:34 INFO core.database: Database initialized successfully
+2026-07-30 01:34:43 INFO core.logging_config: Logging initialized (level=INFO, file=D:\artixcore-contentPilot\logs\contentpilot.log)
+2026-07-30 01:34:44 ERROR core.error_handler: CONFIGURATION_ERROR context=streamlit_page: BOOTSTRAP_ADMIN_EMAIL requires BOOTSTRAP_ADMIN_PASSWORD or BOOTSTRAP_ADMIN_PASSWORD_HASH. | reason=BOOTSTRAP_ADMIN_EMAIL requires BOOTSTRAP_ADMIN_PASSWORD or BOOTSTRAP_ADMIN_PASSWORD_HASH.
