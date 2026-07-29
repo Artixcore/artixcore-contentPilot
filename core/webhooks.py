@@ -67,6 +67,13 @@ def verify_hmac_sha256(
     return hmac.compare_digest(expected.lower(), supplied.lower())
 
 
+def _validate_replay(existing: WebhookReceipt, payload_digest: str) -> None:
+    if not hmac.compare_digest(existing.payload_digest, payload_digest):
+        raise ValidationAppError(
+            "Webhook event ID was reused with a different payload. The event was rejected."
+        )
+
+
 def record_webhook_receipt(
     session: Session,
     *,
@@ -98,6 +105,7 @@ def record_webhook_receipt(
     if not isinstance(body, bytes) or len(body) > 10 * 1024 * 1024:
         raise ValidationAppError("Webhook payload is invalid or too large.")
 
+    payload_digest = hashlib.sha256(body).hexdigest()
     existing = session.scalar(
         select(WebhookReceipt).where(
             WebhookReceipt.provider == safe_provider,
@@ -105,13 +113,14 @@ def record_webhook_receipt(
         )
     )
     if existing:
+        _validate_replay(existing, payload_digest)
         return existing, False
 
     receipt = WebhookReceipt(
         provider=safe_provider,
         event_id=safe_event_id,
         event_type=safe_event_type,
-        payload_digest=hashlib.sha256(body).hexdigest(),
+        payload_digest=payload_digest,
         signature_valid=bool(signature_valid),
         status="received" if signature_valid else "rejected",
         error_code=None if signature_valid else "INVALID_SIGNATURE",
@@ -144,6 +153,7 @@ def record_webhook_receipt(
             )
         )
         if existing:
+            _validate_replay(existing, payload_digest)
             return existing, False
         raise
 
