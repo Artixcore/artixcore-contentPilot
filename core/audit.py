@@ -30,6 +30,7 @@ def log_audit_event(
     resource_id: str | int | None = None,
     event_data: dict[str, Any] | None = None,
     request_id: str | None = None,
+    workspace_id: int | None = None,
 ) -> AuditEvent | None:
     """Stage an audit event without committing or rolling back caller work."""
     safe_action = sanitize_log_message(str(action or "unknown"))[:128]
@@ -37,6 +38,10 @@ def log_audit_event(
     safe_email = sanitize_log_message(str(actor_email or ""))[:320] or None
     safe_resource_type = sanitize_log_message(str(resource_type or ""))[:100] or None
     safe_resource_id = sanitize_log_message(str(resource_id or ""))[:255] or None
+    active_workspace_id = workspace_id
+    if active_workspace_id is None:
+        value = session.info.get("workspace_id")
+        active_workspace_id = int(value) if value is not None else None
 
     try:
         payload = json.loads(sanitize_payload(event_data or {}))
@@ -45,6 +50,7 @@ def log_audit_event(
         serialized = "{}"
 
     event = AuditEvent(
+        workspace_id=active_workspace_id,
         request_id=(request_id or new_request_id())[:64],
         actor_user_id=actor_user_id,
         actor_email=safe_email,
