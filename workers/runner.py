@@ -15,6 +15,7 @@ from core.database import get_session, init_db
 from core.job_handlers import execute_registered_job
 from core.jobs import JobError, claim_next_job, complete_job, fail_job
 from core.logging_config import get_logger, setup_logging
+from core.tenancy import set_session_workspace
 
 logger = get_logger(__name__)
 
@@ -50,12 +51,17 @@ def _payload(raw: str) -> dict:
 
 
 def run_once(worker_id: str) -> bool:
-    session = get_session()
+    # Queue claiming is the only cross-workspace worker operation. Execution is
+    # rebound to the claimed job workspace before any handler is called.
+    session = get_session(tenant_bypass=True)
     job = None
     try:
         job = claim_next_job(session, worker_id=worker_id)
         if job is None:
             return False
+        if not job.workspace_id:
+            raise JobError("Job has no workspace assignment.", retryable=False)
+        set_session_workspace(session, int(job.workspace_id), tenant_bypass=False)
         result = execute_registered_job(
             session,
             job_type=job.job_type,
@@ -67,12 +73,19 @@ def run_once(worker_id: str) -> bool:
             worker_id=worker_id,
             result=result,
         )
-        logger.info("Completed job id=%s type=%s", job.id, job.job_type)
+        logger.info(
+            "Completed job id=%s workspace=%s type=%s",
+            job.id,
+            job.workspace_id,
+            job.job_type,
+        )
         return True
     except Exception as exc:
         session.rollback()
         if job is not None:
             try:
+                if job.workspace_id:
+                    set_session_workspace(session, int(job.workspace_id), tenant_bypass=False)
                 retryable = getattr(exc, "retryable", True)
                 failed = fail_job(
                     session,
@@ -82,8 +95,9 @@ def run_once(worker_id: str) -> bool:
                     retryable=bool(retryable),
                 )
                 logger.warning(
-                    "Job failed id=%s type=%s status=%s error=%s",
+                    "Job failed id=%s workspace=%s type=%s status=%s error=%s",
                     job.id,
+                    job.workspace_id,
                     job.job_type,
                     failed.status,
                     type(exc).__name__,
