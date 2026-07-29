@@ -1,0 +1,167 @@
+name: Product CI Final
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches:
+      - "agent/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-ci-final-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_ENV: test
+  APP_DEBUG: "false"
+  ALERTS_ENABLED: "false"
+  CONTENTPILOT_ENCRYPTION_KEYS: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  WORKSPACE_API_KEY_PEPPER: product-ci-workspace-api-key-pepper-32-characters
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} complete suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    env:
+      DATABASE_URL: sqlite:///:memory:
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --requirement requirements.txt
+          python -m pip install ruff
+      - name: Dependency consistency
+        run: python -m pip check
+      - name: Compile every application package
+        run: python -m compileall -q app.py app_complete.py core chatbot providers publishers ui workers tests scripts
+      - name: Detect likely runtime errors
+        run: ruff check app.py app_complete.py core chatbot providers publishers ui workers tests scripts --select E9,F63,F7,F82
+      - name: Run regression suite
+        run: pytest -q --maxfail=1
+
+  postgres:
+    name: PostgreSQL schema and tenant integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: contentpilot_test
+          POSTGRES_USER: contentpilot
+          POSTGRES_PASSWORD: contentpilot_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U contentpilot -d contentpilot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://contentpilot:contentpilot_ci_password@127.0.0.1:5432/contentpilot_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --requirement requirements.txt
+      - name: Initialize and verify PostgreSQL schema
+        run: python scripts/ci_database_smoke.py
+      - name: Import complete runtime against PostgreSQL configuration
+        run: python -c "import app_complete; import core.product_models; import core.tenant_models"
+
+  security:
+    name: Security and dependency gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DATABASE_URL: sqlite:///:memory:
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies and scanners
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --requirement requirements.txt
+          python -m pip install bandit pip-audit
+      - name: Bandit medium and high severity gate
+        run: bandit -r app.py app_complete.py core chatbot providers publishers ui workers -x tests -ll --skip B101
+      - name: Audit declared dependencies
+        run: pip-audit --strict --requirement requirements.txt
+
+  container:
+    name: Read-only complete container smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [test, postgres, security]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose topology
+        env:
+          POSTGRES_PASSWORD: contentpilot_ci_password
+          DATABASE_URL: postgresql+psycopg://contentpilot:contentpilot_ci_password@postgres:5432/contentpilot
+        run: docker compose -f compose.example.yml config --quiet
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: contentpilot:product-ci-final
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start read-only container
+        run: |
+          docker run --detach \
+            --name contentpilot-product-ci-final \
+            --publish 127.0.0.1:8501:8501 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --read-only \
+            --tmpfs /tmp:size=256m,mode=1777 \
+            --tmpfs /app/logs:size=64m,mode=1777 \
+            --env APP_ENV=test \
+            --env APP_DEBUG=false \
+            --env ALERTS_ENABLED=false \
+            --env DATABASE_URL=sqlite:////tmp/contentpilot-ci.db \
+            --env CONTENTPILOT_ENCRYPTION_KEYS=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+            --env WORKSPACE_API_KEY_PEPPER=product-ci-workspace-api-key-pepper-32-characters \
+            contentpilot:product-ci-final
+      - name: Verify application health
+        run: |
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent --show-error http://127.0.0.1:8501/_stcore/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs contentpilot-product-ci-final
+          exit 1
+      - name: Logs on failure
+        if: failure()
+        run: docker logs contentpilot-product-ci-final || true
+      - name: Stop container
+        if: always()
+        run: docker rm --force contentpilot-product-ci-final || true
