@@ -61,8 +61,8 @@ jobs:
       - name: Scan application code
         run: bandit -r app.py core chatbot providers publishers ui -x tests -ll --skip B101
 
-      - name: Audit dependencies
-        run: pip-audit --strict
+      - name: Audit declared Python dependencies
+        run: pip-audit --requirement requirements.txt --strict
 
   publish:
     name: Publish verified image
