@@ -1,13 +1,16 @@
-"""Artixcore ContentPilot — Streamlit application entry point."""
-
-import logging
+"""Artixcore ContentPilot Streamlit application entry point."""
 
 import streamlit as st
 from dotenv import load_dotenv
 
+# Load environment values before importing modules that read configuration at import time.
+load_dotenv()
+
 from core.chat_database import seed_default_chatbot_settings
+from core.config_validation import validate_startup_configuration
 from core.database import get_session, init_db, seed_default_brand_profile
 from core.error_handler import handle_exception
+from core.logging_config import setup_logging
 from ui.ai_workspace import render_ai_workspace
 from ui.approvals import render_approvals
 from ui.brand_settings import render_brand_settings
@@ -24,9 +27,7 @@ from ui.publishing_settings import render_publishing_settings
 from ui.theme import init_theme
 from ui.training_data import render_training_data
 
-load_dotenv()
-
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+setup_logging()
 
 
 @st.cache_resource
@@ -37,6 +38,9 @@ def bootstrap_database():
         seed_default_brand_profile(session)
         seed_default_chatbot_settings(session)
         session.commit()
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -60,6 +64,18 @@ def _render_error(exc: BaseException) -> None:
         st.warning("This failure may be temporary. Please retry the action.")
 
 
+def _bootstrap_application() -> bool:
+    try:
+        validate_startup_configuration()
+        bootstrap_database()
+        start_telegram_controller()
+        return True
+    except Exception as exc:
+        _render_error(exc)
+        st.warning("ContentPilot stopped before serving the dashboard because startup checks failed.")
+        return False
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Artixcore ContentPilot",
@@ -71,8 +87,8 @@ def main() -> None:
     init_theme()
     init_navigation()
 
-    bootstrap_database()
-    start_telegram_controller()
+    if not _bootstrap_application():
+        st.stop()
 
     page = render_sidebar()
     render_topbar()
