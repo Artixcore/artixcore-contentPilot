@@ -21,7 +21,8 @@ from core.retries import retry_on_sqlite_locked
 import core.operations_models  # noqa: F401,E402
 import core.security_models  # noqa: F401,E402
 import core.tenant_models  # noqa: F401,E402
-from core.tenancy import WorkspaceContext, install_tenant_session_hooks, set_session_workspace
+from core.tenant_runtime import bind_workspace as set_session_workspace
+from core.tenancy import WorkspaceContext, install_tenant_session_hooks
 
 load_dotenv()
 install_tenant_session_hooks()
@@ -169,8 +170,8 @@ def check_database_health() -> dict:
     """Check database reachability and required schema without disclosing credentials."""
     try:
         engine = get_engine()
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
         inspector = inspect(engine)
         tables = set(inspector.get_table_names())
         required = set(Base.metadata.tables.keys())
