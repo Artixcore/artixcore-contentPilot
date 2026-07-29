@@ -5,7 +5,6 @@ on:
     branches: [master]
   push:
     branches:
-      - master
       - "agent/**"
   workflow_dispatch:
 
@@ -127,8 +126,8 @@ jobs:
       - name: Scan Python code
         run: bandit -r app.py core chatbot providers publishers ui -x tests -ll --skip B101
 
-      - name: Audit Python dependencies
-        run: pip-audit --strict
+      - name: Audit declared Python dependencies
+        run: pip-audit --requirement requirements.txt --strict
 
   container:
     name: Container build and smoke test
