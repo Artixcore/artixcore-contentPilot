@@ -20,7 +20,7 @@ def render_sidebar(
     available_workspaces: list[WorkspaceContext],
 ) -> str:
     """Render workspace switcher, role-filtered navigation, and account actions."""
-    nav_pages = available_labels(user) or ["Dashboard"]
+    nav_pages = available_labels(user, workspace) or ["Dashboard"]
 
     with st.sidebar:
         st.title("Artixcore Pilot")
@@ -51,7 +51,7 @@ def render_sidebar(
 
         st.caption(f"Workspace role: {workspace.role.replace('_', ' ').title()}")
 
-        if user.can("create_content"):
+        if "Create Post" in nav_pages:
             if st.button("+ New Content", use_container_width=True, key="nav_new_content"):
                 st.session_state["page"] = "Create Post"
                 st.rerun()
