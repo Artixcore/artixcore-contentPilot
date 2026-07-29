@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, event, inspect, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -47,6 +47,15 @@ def _ensure_data_dir() -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA secure_delete=ON")
+    finally:
+        cursor.close()
+
+
 def get_engine():
     global _engine
     if _engine is None:
@@ -67,7 +76,9 @@ def get_engine():
                 {
                     "pool_size": _bounded_int("DATABASE_POOL_SIZE", 5, 1, 50),
                     "max_overflow": _bounded_int("DATABASE_MAX_OVERFLOW", 10, 0, 100),
-                    "pool_recycle": _bounded_int("DATABASE_POOL_RECYCLE_SECONDS", 1_800, 60, 86_400),
+                    "pool_recycle": _bounded_int(
+                        "DATABASE_POOL_RECYCLE_SECONDS", 1_800, 60, 86_400
+                    ),
                 }
             )
         _engine = create_engine(
@@ -75,6 +86,8 @@ def get_engine():
             connect_args=connect_args,
             **engine_kwargs,
         )
+        if is_sqlite:
+            event.listen(_engine, "connect", _configure_sqlite_connection)
     return _engine
 
 
