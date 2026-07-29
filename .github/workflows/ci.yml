@@ -49,10 +49,10 @@ jobs:
         run: python -m pip check
 
       - name: Compile Python sources
-        run: python -m compileall -q app.py core chatbot providers publishers ui tests scripts
+        run: python -m compileall -q app.py core chatbot providers publishers ui tests scripts workers
 
       - name: Check likely runtime errors
-        run: ruff check app.py core chatbot providers publishers ui tests scripts --select E9,F63,F7,F82
+        run: ruff check app.py core chatbot providers publishers ui tests scripts workers --select E9,F63,F7,F82
 
       - name: Run test suite
         run: pytest -q --maxfail=1
@@ -124,7 +124,7 @@ jobs:
           python -m pip install bandit pip-audit
 
       - name: Scan Python code
-        run: bandit -r app.py core chatbot providers publishers ui -x tests -ll --skip B101
+        run: bandit -r app.py core chatbot providers publishers ui workers -x tests -ll --skip B101
 
       - name: Audit declared Python dependencies
         run: pip-audit --requirement requirements.txt --strict
@@ -137,6 +137,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate compose topology
+        env:
+          POSTGRES_PASSWORD: contentpilot_ci_password
+        run: |
+          cp .env.example .env
+          docker compose -f compose.example.yml config >/dev/null
+          rm -f .env
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
