@@ -32,6 +32,7 @@ API_SCOPES = frozenset(
         "workspace:admin",
     }
 )
+PBKDF2_ITERATIONS = 310_000
 
 
 def _utc_now() -> datetime:
@@ -57,7 +58,12 @@ def _pepper() -> bytes:
 
 
 def _hash(raw_key: str) -> str:
-    return hmac.new(_pepper(), raw_key.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        raw_key.encode("utf-8"),
+        _pepper(),
+        PBKDF2_ITERATIONS,
+    ).hex()
 
 
 def create_workspace_api_key(
