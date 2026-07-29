@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 # Load deployment secrets before importing modules that read configuration at import time.
 load_dotenv()
 
-from core.auth import bootstrap_owner, require_permission
+from core.auth import bootstrap_owner
 from core.chat_database import seed_default_chatbot_settings
 from core.config_validation import validate_startup_configuration
 from core.database import get_session, init_db, seed_default_brand_profile, set_session_workspace
@@ -23,6 +23,7 @@ from core.tenancy import (
     list_accessible_workspaces,
     resolve_workspace,
 )
+from core.workspace_permissions import require_combined_permission
 from ui.ai_workspace import render_ai_workspace
 from ui.approvals import render_approvals
 from ui.authentication import current_user, render_login
@@ -101,7 +102,7 @@ def _render_page(
     user,
     workspace: WorkspaceContext,
 ) -> None:
-    require_permission(user, permission_for_label(page))
+    require_combined_permission(user, workspace, permission_for_label(page))
 
     if page == "Dashboard":
         render_dashboard(session)
@@ -138,7 +139,7 @@ def _render_page(
     elif page == "Security":
         render_security_settings(session, user)
     else:
-        require_permission(user, "read")
+        require_combined_permission(user, workspace, "read")
         render_dashboard(session)
 
 
