@@ -1,4 +1,4 @@
-"""Database initialization, secure engine configuration, and session management."""
+"""Database initialization, secure engine configuration, and tenant-aware sessions."""
 
 from __future__ import annotations
 
@@ -17,11 +17,14 @@ from core.migrations import run_migrations
 from core.models import DEFAULT_BRAND, Base, BrandProfile
 from core.retries import retry_on_sqlite_locked
 
-# Importing registers security and operations tables on Base.metadata.
+# Importing registers security, tenancy, and operations tables on Base.metadata.
 import core.operations_models  # noqa: F401,E402
 import core.security_models  # noqa: F401,E402
+import core.tenant_models  # noqa: F401,E402
+from core.tenancy import WorkspaceContext, install_tenant_session_hooks, set_session_workspace
 
 load_dotenv()
+install_tenant_session_hooks()
 
 logger = get_logger(__name__)
 
@@ -104,13 +107,22 @@ def get_session_factory():
     return _SessionLocal
 
 
-def get_session() -> Session:
-    return get_session_factory()()
+def get_session(
+    workspace: WorkspaceContext | int | None = None,
+    *,
+    tenant_bypass: bool = False,
+) -> Session:
+    session = get_session_factory()()
+    return set_session_workspace(session, workspace, tenant_bypass=tenant_bypass)
 
 
 @contextmanager
-def session_scope():
-    session = get_session()
+def session_scope(
+    workspace: WorkspaceContext | int | None = None,
+    *,
+    tenant_bypass: bool = False,
+):
+    session = get_session(workspace, tenant_bypass=tenant_bypass)
     try:
         yield session
         session.commit()
@@ -176,10 +188,16 @@ def check_database_health() -> dict:
 
 
 @retry_on_sqlite_locked()
-def seed_default_brand_profile(session: Session | None = None) -> BrandProfile | None:
+def seed_default_brand_profile(
+    session: Session | None = None,
+    *,
+    workspace: WorkspaceContext | int | None = None,
+) -> BrandProfile | None:
     own_session = session is None
     if own_session:
-        session = get_session()
+        session = get_session(workspace)
+    elif workspace is not None:
+        set_session_workspace(session, workspace)
     try:
         existing = session.execute(select(BrandProfile)).scalars().first()
         if existing:
