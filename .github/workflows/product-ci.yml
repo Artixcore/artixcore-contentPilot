@@ -1,0 +1,205 @@
+name: Product CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches:
+      - "agent/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Product tests Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    env:
+      APP_ENV: test
+      APP_DEBUG: "false"
+      ALERTS_ENABLED: "false"
+      DATABASE_URL: sqlite:///:memory:
+      CONTENTPILOT_ENCRYPTION_KEYS: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      WORKSPACE_API_KEY_PEPPER: product-ci-workspace-api-key-pepper-32-characters
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --requirement requirements.txt
+          python -m pip install ruff
+
+      - name: Verify dependencies
+        run: python -m pip check
+
+      - name: Compile complete application
+        run: python -m compileall -q app.py app_complete.py core chatbot providers publishers ui workers tests scripts
+
+      - name: Check likely runtime errors
+        run: ruff check app.py app_complete.py core chatbot providers publishers ui workers tests scripts --select E9,F63,F7,F82
+
+      - name: Run full regression suite
+        run: pytest -q --maxfail=1
+
+  postgres:
+    name: PostgreSQL tenant schema and integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: contentpilot_test
+          POSTGRES_USER: contentpilot
+          POSTGRES_PASSWORD: contentpilot_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U contentpilot -d contentpilot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      APP_ENV: test
+      APP_DEBUG: "false"
+      ALERTS_ENABLED: "false"
+      DATABASE_URL: postgresql+psycopg://contentpilot:contentpilot_ci_password@127.0.0.1:5432/contentpilot_test
+      CONTENTPILOT_ENCRYPTION_KEYS: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      WORKSPACE_API_KEY_PEPPER: product-ci-workspace-api-key-pepper-32-characters
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --requirement requirements.txt
+
+      - name: Initialize and verify schema
+        run: python scripts/ci_database_smoke.py
+
+      - name: Run tenancy and product tests on PostgreSQL
+        run: pytest -q tests/test_tenancy.py tests/test_product_features.py tests/test_automation_oauth.py tests/test_brand_brain.py --maxfail=1
+
+  security:
+    name: Product security scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      APP_ENV: test
+      APP_DEBUG: "false"
+      ALERTS_ENABLED: "false"
+      DATABASE_URL: sqlite:///:memory:
+      CONTENTPILOT_ENCRYPTION_KEYS: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      WORKSPACE_API_KEY_PEPPER: product-ci-workspace-api-key-pepper-32-characters
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies and scanners
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --requirement requirements.txt
+          python -m pip install bandit pip-audit
+
+      - name: Scan application and worker code
+        run: bandit -r app.py app_complete.py core chatbot providers publishers ui workers -x tests -ll --skip B101
+
+      - name: Audit declared dependencies
+        run: pip-audit --strict --requirement requirements.txt
+
+  container:
+    name: Complete container smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [test, postgres, security]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate compose topology
+        env:
+          POSTGRES_PASSWORD: contentpilot_ci_password
+          DATABASE_URL: postgresql+psycopg://contentpilot:contentpilot_ci_password@postgres:5432/contentpilot
+        run: docker compose -f compose.example.yml config --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build complete image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: contentpilot:product-ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start hardened application
+        run: |
+          docker run --detach \
+            --name contentpilot-product-ci \
+            --publish 127.0.0.1:8501:8501 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --read-only \
+            --tmpfs /tmp:size=128m,mode=1777 \
+            --tmpfs /app/data:size=128m,mode=700 \
+            --tmpfs /app/logs:size=64m,mode=700 \
+            --env APP_ENV=test \
+            --env APP_DEBUG=false \
+            --env ALERTS_ENABLED=false \
+            --env DATABASE_URL=sqlite:////app/data/contentpilot-ci.db \
+            --env CONTENTPILOT_ENCRYPTION_KEYS=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+            --env WORKSPACE_API_KEY_PEPPER=product-ci-workspace-api-key-pepper-32-characters \
+            contentpilot:product-ci
+
+      - name: Verify Streamlit health
+        run: |
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent --show-error http://127.0.0.1:8501/_stcore/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs contentpilot-product-ci
+          exit 1
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker logs contentpilot-product-ci || true
+
+      - name: Stop application
+        if: always()
+        run: docker rm --force contentpilot-product-ci || true
