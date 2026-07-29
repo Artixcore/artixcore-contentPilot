@@ -13,9 +13,12 @@ from core.audit import log_audit_event
 from core.auth import AuthenticatedUser
 from core.errors import AppError, ValidationAppError
 from core.jobs import enqueue_job
+from core.logging_config import sanitize_log_message
+from core.models import Post
 from core.notifications import create_notification
 from core.operations_models import IntegrationConnection
 from core.product_models import AutomationRule, AutomationRun, LeadRecord
+from core.publishing import PUBLISHABLE_STATUSES
 from core.tenant_models import WorkspaceMembership
 from core.tenancy import WorkspaceContext, require_workspace_permission
 from core.validation import normalize_text, validate_http_url, validate_positive_id
@@ -40,13 +43,15 @@ ACTION_TYPES = frozenset(
         "invoke_webhook",
     }
 )
-_OPERATORS = frozenset({"equals", "not_equals", "in", "not_in", "gte", "lte", "contains"})
-_LEAD_STATUSES = frozenset({"new", "qualified", "contacted", "proposal", "won", "lost", "spam", "archived"})
+OPERATORS = frozenset({"equals", "not_equals", "in", "not_in", "gte", "lte", "contains"})
+LEAD_STATUSES = frozenset(
+    {"new", "qualified", "contacted", "proposal", "won", "lost", "spam", "archived"}
+)
 
 
 class AutomationError(AppError):
     default_error_code = "AUTOMATION_ERROR"
-    default_user_action = "Review the automation rule and retry after correcting its configuration."
+    default_user_action = "Review the automation rule and correct its configuration."
     retryable_default = False
 
 
@@ -56,7 +61,9 @@ def _utc_now() -> datetime:
 
 def _safe_json(value: Any, *, field: str, maximum: int = 50_000) -> str:
     try:
-        serialized = json.dumps(value if value is not None else {}, ensure_ascii=False, separators=(",", ":"))
+        serialized = json.dumps(
+            value if value is not None else {}, ensure_ascii=False, separators=(",", ":")
+        )
     except (TypeError, ValueError) as exc:
         raise ValidationAppError(f"{field} must be JSON serializable.") from exc
     if len(serialized) > maximum:
@@ -75,23 +82,29 @@ def _load_object(value: str | None, *, field: str) -> dict[str, Any]:
 
 
 def _validate_conditions(conditions: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(conditions, dict):
+        raise ValidationAppError("Automation conditions must be an object.")
     if len(conditions) > 20:
         raise ValidationAppError("An automation rule cannot contain more than 20 conditions.")
     result: dict[str, Any] = {}
-    for field, specification in conditions.items():
+    for field_name, specification in conditions.items():
         clean_field = normalize_text(
-            field, field="Condition field", min_length=1, max_length=100, allow_newlines=False
+            field_name,
+            field="Condition field",
+            min_length=1,
+            max_length=100,
+            allow_newlines=False,
         )
         if not all(character.isalnum() or character in {"_", "."} for character in clean_field):
             raise ValidationAppError("Condition fields contain unsupported characters.")
         if not isinstance(specification, dict):
             raise ValidationAppError("Each condition must contain an operator and value.")
         operator = str(specification.get("operator", "equals")).strip().lower()
-        if operator not in _OPERATORS:
+        if operator not in OPERATORS:
             raise ValidationAppError("Automation condition operator is unsupported.")
         expected = specification.get("value")
         if isinstance(expected, (dict, tuple, set)):
-            raise ValidationAppError("Automation condition values must be scalar values or lists.")
+            raise ValidationAppError("Condition values must be scalar values or lists.")
         if isinstance(expected, list) and len(expected) > 100:
             raise ValidationAppError("Automation condition list is too large.")
         result[clean_field] = {"operator": operator, "value": expected}
@@ -137,15 +150,17 @@ def matches_rule(rule: AutomationRule, payload: dict[str, Any]) -> bool:
     conditions = _load_object(rule.conditions_json, field="Rule conditions")
     return all(
         _matches_condition(
-            _field_value(payload, field),
+            _field_value(payload, field_name),
             specification["operator"],
             specification.get("value"),
         )
-        for field, specification in conditions.items()
+        for field_name, specification in conditions.items()
     )
 
 
 def _validate_action_config(action_type: str, config: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(config, dict):
+        raise ValidationAppError("Action configuration must be an object.")
     safe = dict(config)
     if action_type == "create_notification":
         safe["title"] = normalize_text(
@@ -162,6 +177,14 @@ def _validate_action_config(action_type: str, config: dict[str, Any]) -> dict[st
             safe["recipient_user_id"] = validate_positive_id(
                 safe["recipient_user_id"], field="Recipient user ID"
             )
+        if safe.get("action_label") is not None:
+            safe["action_label"] = normalize_text(
+                safe["action_label"], field="Action label", max_length=100, allow_newlines=False
+            )
+        if safe.get("action_page") is not None:
+            safe["action_page"] = normalize_text(
+                safe["action_page"], field="Action page", max_length=100, allow_newlines=False
+            )
     elif action_type in {"assign_lead", "change_lead_status"}:
         if safe.get("lead_id") is not None:
             safe["lead_id"] = validate_positive_id(safe["lead_id"], field="Lead ID")
@@ -169,7 +192,7 @@ def _validate_action_config(action_type: str, config: dict[str, Any]) -> dict[st
             safe["user_id"] = validate_positive_id(safe.get("user_id"), field="User ID")
         else:
             status = str(safe.get("status", "")).strip().lower()
-            if status not in _LEAD_STATUSES:
+            if status not in LEAD_STATUSES:
                 raise ValidationAppError("Lead status is invalid.")
             safe["status"] = status
     elif action_type in {"queue_integration_health_check", "invoke_webhook"}:
@@ -213,14 +236,14 @@ def create_rule(
     cooldown = int(cooldown_seconds)
     if not 0 <= cooldown <= 86_400:
         raise ValidationAppError("Automation cooldown must be between 0 and 86,400 seconds.")
-    safe_conditions = _validate_conditions(conditions)
-    safe_config = _validate_action_config(action, action_config)
     model = AutomationRule(
         name=clean_name,
         trigger_type=trigger,
-        conditions_json=_safe_json(safe_conditions, field="Conditions"),
+        conditions_json=_safe_json(_validate_conditions(conditions), field="Conditions"),
         action_type=action,
-        action_config_json=_safe_json(safe_config, field="Action configuration"),
+        action_config_json=_safe_json(
+            _validate_action_config(action, action_config), field="Action configuration"
+        ),
         is_active=bool(is_active),
         cooldown_seconds=cooldown,
         created_by_user_id=actor.id,
@@ -307,6 +330,7 @@ def _execute_action(
 ) -> dict[str, Any]:
     config = _load_object(rule.action_config_json, field="Action configuration")
     action = rule.action_type
+
     if action == "create_notification":
         recipient_id = config.get("recipient_user_id")
         if recipient_id is not None and not _active_workspace_member(
@@ -321,7 +345,7 @@ def _execute_action(
             recipient_user_id=recipient_id,
             action_label=config.get("action_label"),
             action_page=config.get("action_page"),
-            deduplication_key=f"automation:{rule.id}:{config.get('deduplication_key', 'event')}",
+            deduplication_key=f"automation:{rule.id}:{payload.get('event_key', 'event')}",
             commit=False,
         )
         return {"notification_id": notification.id}
@@ -351,20 +375,29 @@ def _execute_action(
             priority=70,
             max_attempts=3,
             idempotency_key=f"automation-health:{rule.id}:{connection.id}:{_utc_now():%Y%m%d%H}",
+            commit=False,
         )
         return {"job_id": job.id, "connection_id": connection.id}
 
     if action == "enqueue_publish":
-        post_id = config.get("post_id") or payload.get("post_id")
+        post_id = validate_positive_id(
+            config.get("post_id") or payload.get("post_id"), field="Post ID"
+        )
+        post = session.get(Post, post_id)
+        if post is None:
+            raise AutomationError("Automation target post was not found.")
+        if post.status not in PUBLISHABLE_STATUSES:
+            raise AutomationError("Automation can publish only approved or scheduled posts.")
         job = enqueue_job(
             session,
             job_type="publishing.deliver",
-            payload={"post_id": validate_positive_id(post_id, field="Post ID")},
+            payload={"post_id": post.id},
             priority=80,
             max_attempts=3,
-            idempotency_key=f"automation-publish:{rule.id}:{post_id}",
+            idempotency_key=f"automation-publish:{rule.id}:{post.id}",
+            commit=False,
         )
-        return {"job_id": job.id, "post_id": int(post_id)}
+        return {"job_id": job.id, "post_id": post.id}
 
     if action == "invoke_webhook":
         connection = session.get(IntegrationConnection, int(config["connection_id"]))
@@ -390,6 +423,7 @@ def _execute_action(
             priority=60,
             max_attempts=4,
             idempotency_key=f"automation-webhook:{rule.id}:{payload.get('event_key', '')}",
+            commit=False,
         )
         return {"job_id": job.id, "connection_id": connection.id}
 
@@ -424,14 +458,14 @@ def process_event(
         ).all()
     )
     runs: list[AutomationRun] = []
+
     for rule in rules:
-        existing = session.scalar(
+        if session.scalar(
             select(AutomationRun.id).where(
                 AutomationRun.rule_id == rule.id,
                 AutomationRun.event_key == key,
             )
-        )
-        if existing:
+        ):
             continue
         run = AutomationRun(
             rule_id=rule.id,
@@ -457,7 +491,10 @@ def process_event(
                 run.output_json = '{"reason":"conditions_not_met"}'
                 run.finished_at = now
                 continue
-            output = _execute_action(session, context=context, rule=rule, payload=safe_payload)
+            with session.begin_nested():
+                output = _execute_action(
+                    session, context=context, rule=rule, payload=safe_payload
+                )
             run.status = "succeeded"
             run.output_json = _safe_json(output, field="Automation output")
             run.finished_at = _utc_now()
@@ -465,20 +502,26 @@ def process_event(
         except Exception as exc:
             run.status = "failed"
             run.error_code = getattr(exc, "error_code", type(exc).__name__.upper())[:100]
-            run.error_message = normalize_text(
-                getattr(exc, "message", str(exc)),
-                field="Automation error",
-                max_length=2_000,
-            )
+            run.error_message = sanitize_log_message(
+                getattr(exc, "message", str(exc))
+            )[:2_000]
             run.finished_at = _utc_now()
-        log_audit_event(
-            session,
-            action="automation.rule_executed",
-            outcome="success" if run.status == "succeeded" else "warning" if run.status == "skipped" else "failure",
-            resource_type="automation_run",
-            resource_id=run.id,
-            event_data={"rule_id": rule.id, "status": run.status, "event_key": key},
-        )
+        finally:
+            log_audit_event(
+                session,
+                action="automation.rule_executed",
+                outcome=(
+                    "success"
+                    if run.status == "succeeded"
+                    else "warning"
+                    if run.status == "skipped"
+                    else "failure"
+                ),
+                resource_type="automation_run",
+                resource_id=run.id,
+                event_data={"rule_id": rule.id, "status": run.status, "event_key": key},
+            )
+
     session.commit()
     for run in runs:
         session.refresh(run)
