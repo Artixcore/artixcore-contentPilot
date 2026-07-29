@@ -8,6 +8,7 @@ from core.chat_database import seed_default_chatbot_settings
 from core.database import get_session, init_db, reset_engine, seed_default_brand_profile
 
 _TEST_FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+_TEST_API_PEPPER = "contentpilot-test-api-key-pepper-32-characters-minimum"
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +31,7 @@ def isolate_env(monkeypatch):
     monkeypatch.setenv("ALERTS_ENABLED", "false")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("CONTENTPILOT_ENCRYPTION_KEYS", _TEST_FERNET_KEY)
+    monkeypatch.setenv("WORKSPACE_API_KEY_PEPPER", _TEST_API_PEPPER)
     monkeypatch.setenv("AUTH_SESSION_HOURS", "8")
     monkeypatch.setenv("AUTH_MAX_FAILED_LOGINS", "5")
     monkeypatch.setenv("AUTH_LOCK_MINUTES", "15")
@@ -39,7 +41,10 @@ def isolate_env(monkeypatch):
 def db_session() -> Session:
     reset_engine("sqlite:///:memory:")
     init_db()
-    session = get_session()
+    # Legacy tests exercise individual services before a tenant is created.
+    # Explicit bypass keeps those tests isolated while dedicated tenant tests
+    # validate the fail-closed workspace boundary.
+    session = get_session(tenant_bypass=True)
     seed_default_brand_profile(session)
     seed_default_chatbot_settings(session)
     session.commit()
