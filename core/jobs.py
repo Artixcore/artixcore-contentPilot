@@ -72,7 +72,9 @@ def enqueue_job(
     max_attempts: int = 3,
     available_at: datetime | None = None,
     idempotency_key: str | None = None,
+    commit: bool = True,
 ) -> BackgroundJob:
+    """Create an idempotent job, optionally staged in the caller transaction."""
     if actor is not None and not (
         actor.can("create_content")
         or actor.can("publish_content")
@@ -108,8 +110,9 @@ def enqueue_job(
         available_at=available_at or _utc_now(),
     )
     try:
-        session.add(job)
-        session.flush()
+        with session.begin_nested():
+            session.add(job)
+            session.flush()
         log_audit_event(
             session,
             action="job.enqueued",
@@ -123,20 +126,25 @@ def enqueue_job(
                 "max_attempts": job.max_attempts,
             },
         )
-        session.commit()
-        session.refresh(job)
+        if commit:
+            session.commit()
+            session.refresh(job)
+        else:
+            session.flush()
         return job
     except IntegrityError:
-        session.rollback()
         if key:
             existing = session.scalar(
                 select(BackgroundJob).where(BackgroundJob.idempotency_key == key).limit(1)
             )
             if existing:
                 return existing
+        if commit:
+            session.rollback()
         raise
     except Exception:
-        session.rollback()
+        if commit:
+            session.rollback()
         raise
 
 
