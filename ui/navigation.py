@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 NAV_OPTIONS: list[tuple[str, str]] = [
     ("Dashboard", "dashboard"),
+    ("Notifications", "notifications"),
     ("AI Workspace", "ai_workspace"),
     ("Create Post", "create_post"),
     ("Approvals", "approvals"),
@@ -32,6 +33,7 @@ NAV_KEYS = [key for _, key in NAV_OPTIONS]
 
 PAGE_PERMISSIONS: dict[str, str] = {
     "Dashboard": "read",
+    "Notifications": "read",
     "AI Workspace": "create_content",
     "Create Post": "create_content",
     "Approvals": "approve_content",
@@ -59,6 +61,7 @@ PAGE_LABELS: dict[str, str] = {key: label for label, key in NAV_OPTIONS}
 
 PAGE_SUBTITLES: dict[str, str] = {
     "dashboard": "Overview of your content pipeline, chatbot activity, publishing connectors, and system health.",
+    "notifications": "Review operational alerts, failed jobs, and integration notices.",
     "ai_workspace": "Ask ContentPilot to create, reply, plan, or publish.",
     "create_post": "Generate content for a selected platform.",
     "approvals": "Review, edit, approve, or reject pending content.",
