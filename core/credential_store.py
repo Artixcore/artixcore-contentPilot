@@ -74,6 +74,25 @@ def _decrypt_compatible(
     ) from last_error
 
 
+def get_credential_value_internal(
+    session: Session,
+    *,
+    name: str,
+    migrate: bool = True,
+) -> str:
+    """Read a tenant-bound credential for trusted internal services only."""
+    clean_name = _normalize_name(name)
+    model = session.scalar(
+        select(EncryptedCredential).where(
+            EncryptedCredential.credential_name == clean_name,
+            EncryptedCredential.is_active.is_(True),
+        )
+    )
+    if model is None:
+        raise ValidationAppError("Credential was not found or is inactive.")
+    return _decrypt_compatible(session, model, migrate=migrate)
+
+
 def list_credential_metadata(
     session: Session,
     *,
@@ -94,6 +113,7 @@ def store_credential(
     secret_value: str,
     credential_type: str,
     actor: AuthenticatedUser,
+    commit: bool = True,
 ) -> EncryptedCredential:
     if not (actor.can("manage_security") or actor.can("manage_integrations")):
         require_permission(actor, "manage_security")
@@ -152,11 +172,15 @@ def store_credential(
                 "key_id": model.key_id,
             },
         )
-        session.commit()
-        session.refresh(model)
+        if commit:
+            session.commit()
+            session.refresh(model)
+        else:
+            session.flush()
         return model
     except Exception:
-        session.rollback()
+        if commit:
+            session.rollback()
         raise
 
 
