@@ -13,10 +13,8 @@ from core.tenancy import (
     WorkspaceContext,
     create_organization,
     create_workspace,
-    create_workspace_api_key,
     invite_member,
     remove_member,
-    revoke_workspace_api_key,
     set_membership_role,
 )
 from core.workspace_admin import (
@@ -26,6 +24,7 @@ from core.workspace_admin import (
     revoke_invitation,
     update_workspace_settings,
 )
+from core.workspace_api_keys import create_workspace_api_key, revoke_workspace_api_key
 from ui.notifications import show_error_from_dict, show_success
 
 _API_SCOPE_OPTIONS = [
@@ -297,16 +296,14 @@ def render_workspaces(
                     _handle(exc, "organization.create")
 
         st.subheader("Create another workspace")
-        organizations = session.scalars(
-            select(Organization).where(Organization.status == "active").order_by(Organization.name)
-        ).all()
-        owned = [item for item in organizations if item.owner_user_id == user.id]
-        if user.role in {"owner", "super_admin"}:
-            owned = list(organizations)
-        if not owned:
+        organization_query = select(Organization).where(Organization.status == "active")
+        if user.role not in {"owner", "super_admin"}:
+            organization_query = organization_query.where(Organization.owner_user_id == user.id)
+        organizations = session.scalars(organization_query.order_by(Organization.name)).all()
+        if not organizations:
             st.info("You do not own an organization where a new workspace can be created.")
         else:
-            org_map = {f"{item.name} ({item.slug})": item.id for item in owned}
+            org_map = {f"{item.name} ({item.slug})": item.id for item in organizations}
             with st.form("create_workspace_form"):
                 organization_label = st.selectbox("Organization", list(org_map))
                 new_workspace_name = st.text_input("Workspace name", max_chars=255)
