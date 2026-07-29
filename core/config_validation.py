@@ -73,6 +73,16 @@ def _validate_encryption(production: bool) -> None:
         active_key_id()
 
 
+def _validate_api_key_pepper(production: bool) -> None:
+    pepper = os.getenv("WORKSPACE_API_KEY_PEPPER", "").strip()
+    if production and len(pepper) < 32:
+        raise ConfigurationError(
+            "WORKSPACE_API_KEY_PEPPER must contain at least 32 characters in production."
+        )
+    if pepper and len(pepper) < 32:
+        raise ConfigurationError("WORKSPACE_API_KEY_PEPPER must contain at least 32 characters.")
+
+
 def _validate_bootstrap_pair() -> None:
     email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip()
     password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
@@ -102,6 +112,7 @@ def validate_startup_configuration() -> None:
     database_url = os.getenv("DATABASE_URL", "sqlite:///data/contentpilot.db").strip()
     _validate_database(database_url, production)
     _validate_encryption(production)
+    _validate_api_key_pepper(production)
     _validate_bootstrap_pair()
 
     if production:
@@ -142,6 +153,8 @@ def validate_startup_configuration() -> None:
         "AUTH_SESSION_HOURS": (1, 168),
         "AUTH_MAX_FAILED_LOGINS": (3, 20),
         "AUTH_LOCK_MINUTES": (5, 1_440),
+        "WORKER_POLL_SECONDS": (1, 60),
+        "WORKER_IDLE_SECONDS": (1, 300),
     }
     for key, (minimum, maximum) in integer_fields.items():
         _validate_integer(key, minimum, maximum)
