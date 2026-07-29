@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models import Base, utc_now
@@ -14,6 +24,11 @@ class UserAccount(Base):
     __tablename__ = "user_accounts"
     __table_args__ = (
         UniqueConstraint("email", name="uq_user_accounts_email"),
+        CheckConstraint(
+            "role IN ('owner','super_admin','admin','reviewer','content_creator','viewer')",
+            name="ck_user_accounts_role",
+        ),
+        CheckConstraint("failed_login_count >= 0", name="ck_user_accounts_failed_login_count"),
         Index("ix_user_accounts_role_active", "role", "is_active"),
     )
 
@@ -43,11 +58,18 @@ class AuthSession(Base):
     __tablename__ = "auth_sessions"
     __table_args__ = (
         UniqueConstraint("token_hash", name="uq_auth_sessions_token_hash"),
+        CheckConstraint("length(token_hash) = 64", name="ck_auth_sessions_token_hash_length"),
+        CheckConstraint("length(csrf_hash) = 64", name="ck_auth_sessions_csrf_hash_length"),
+        CheckConstraint("expires_at > created_at", name="ck_auth_sessions_expiry"),
         Index("ix_auth_sessions_user_active", "user_id", "revoked_at", "expires_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     csrf_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     user_agent_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -66,13 +88,21 @@ class AuthSession(Base):
 class AuditEvent(Base):
     __tablename__ = "audit_events"
     __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('success','failure','blocked','warning')",
+            name="ck_audit_events_outcome",
+        ),
         Index("ix_audit_events_actor_created", "actor_user_id", "created_at"),
         Index("ix_audit_events_action_created", "action", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     request_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    actor_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    actor_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     actor_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     action: Mapped[str] = mapped_column(String(128), nullable=False)
     resource_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -88,6 +118,7 @@ class EncryptedCredential(Base):
     __tablename__ = "encrypted_credentials"
     __table_args__ = (
         UniqueConstraint("credential_name", name="uq_encrypted_credentials_name"),
+        CheckConstraint("version >= 1", name="ck_encrypted_credentials_version"),
         Index("ix_encrypted_credentials_active", "is_active"),
     )
 
@@ -98,7 +129,10 @@ class EncryptedCredential(Base):
     credential_type: Mapped[str] = mapped_column(String(100), nullable=False, default="secret")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    created_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
