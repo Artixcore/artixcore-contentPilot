@@ -40,7 +40,21 @@ jobs:
         run: python -m compileall -q app.py core chatbot providers publishers ui tests
 
       - name: Lint security-critical modules
-        run: ruff check app.py core/agent.py core/alerts.py core/config_validation.py core/error_handler.py core/validation.py core/schemas.py tests/test_config_validation.py tests/test_error_handler.py tests/test_security_hardening.py tests/test_validation.py
+        run: >-
+          ruff check
+          app.py
+          core/agent.py
+          core/alerts.py
+          core/config_validation.py
+          core/error_handler.py
+          core/logging_config.py
+          core/schemas.py
+          core/validation.py
+          tests/test_config_validation.py
+          tests/test_error_handler.py
+          tests/test_logging_security.py
+          tests/test_security_hardening.py
+          tests/test_validation.py
 
       - name: Run test suite
         run: pytest -q
