@@ -18,6 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models import Base, utc_now
+from core.tenancy_base import TenantScopedMixin
 
 
 class UserAccount(Base):
@@ -92,11 +93,15 @@ class AuditEvent(Base):
             "outcome IN ('success','failure','blocked','warning')",
             name="ck_audit_events_outcome",
         ),
+        Index("ix_audit_events_workspace_created", "workspace_id", "created_at"),
         Index("ix_audit_events_actor_created", "actor_user_id", "created_at"),
         Index("ix_audit_events_action_created", "action", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     request_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     actor_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("user_accounts.id", ondelete="SET NULL"),
@@ -114,12 +119,14 @@ class AuditEvent(Base):
     )
 
 
-class EncryptedCredential(Base):
+class EncryptedCredential(TenantScopedMixin, Base):
     __tablename__ = "encrypted_credentials"
     __table_args__ = (
-        UniqueConstraint("credential_name", name="uq_encrypted_credentials_name"),
+        UniqueConstraint(
+            "workspace_id", "credential_name", name="uq_encrypted_credentials_workspace_name"
+        ),
         CheckConstraint("version >= 1", name="ck_encrypted_credentials_version"),
-        Index("ix_encrypted_credentials_active", "is_active"),
+        Index("ix_encrypted_credentials_active", "workspace_id", "is_active"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
