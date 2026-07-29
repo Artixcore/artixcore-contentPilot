@@ -122,6 +122,21 @@ def _render_page(session, page: str, user) -> None:
         render_dashboard(session)
 
 
+def _authenticate_request():
+    auth_session = get_session()
+    try:
+        user = current_user(auth_session)
+        if user is None:
+            render_login(auth_session)
+        return user
+    except Exception as exc:
+        auth_session.rollback()
+        _render_error(exc)
+        return None
+    finally:
+        auth_session.close()
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Artixcore ContentPilot",
@@ -136,13 +151,12 @@ def main() -> None:
     if not _bootstrap_application():
         st.stop()
 
+    user = _authenticate_request()
+    if user is None:
+        st.stop()
+
     session = get_session()
     try:
-        user = current_user(session)
-        if user is None:
-            render_login(session)
-            st.stop()
-
         page = render_sidebar(session, user)
         render_topbar(user)
         _render_page(session, page, user)
