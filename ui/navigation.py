@@ -1,4 +1,4 @@
-"""Navigation state helpers with role-aware page permissions."""
+"""Navigation state helpers with global and workspace permissions."""
 
 from __future__ import annotations
 
@@ -6,8 +6,11 @@ from typing import TYPE_CHECKING
 
 import streamlit as st
 
+from core.workspace_permissions import can_access
+
 if TYPE_CHECKING:
     from core.auth import AuthenticatedUser
+    from core.tenancy import WorkspaceContext
 
 NAV_OPTIONS: list[tuple[str, str]] = [
     ("Dashboard", "dashboard"),
@@ -80,11 +83,14 @@ def init_navigation() -> None:
         st.session_state.chat_messages = []
 
 
-def available_labels(user: "AuthenticatedUser") -> list[str]:
+def available_labels(
+    user: "AuthenticatedUser",
+    workspace: "WorkspaceContext",
+) -> list[str]:
     return [
         label
         for label, _ in NAV_OPTIONS
-        if user.can(PAGE_PERMISSIONS.get(label, "read"))
+        if can_access(user, workspace, PAGE_PERMISSIONS.get(label, "read"))
     ]
 
 
