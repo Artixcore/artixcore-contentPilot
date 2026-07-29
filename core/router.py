@@ -2,7 +2,6 @@
 
 import json
 import logging
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -168,9 +167,7 @@ class ProviderRouter:
                 )
                 logger.warning("Provider %s unexpected error: %s", provider.name, type(exc).__name__)
 
-        raise ProviderUnavailableError(
-            last_error or PROVIDER_UNAVAILABLE_MSG
-        )
+        raise ProviderUnavailableError(last_error or PROVIDER_UNAVAILABLE_MSG)
 
     def _build_fallback_chain(
         self,
@@ -211,25 +208,25 @@ class ProviderRouter:
         request_payload_sanitized: str | None = None,
         response_payload_sanitized: str | None = None,
     ) -> None:
+        """Stage a provider log without committing or rolling back the caller transaction."""
         if not self.session:
             return
         try:
-            log = ProviderLog(
-                provider=provider,
-                model=model,
-                task_type=task_type,
-                success=success,
-                latency_ms=latency_ms,
-                error_message=error_message,
-                request_payload_sanitized=request_payload_sanitized,
-                response_payload_sanitized=response_payload_sanitized,
-            )
-            self.session.add(log)
-            self.session.commit()
+            with self.session.begin_nested():
+                log = ProviderLog(
+                    provider=provider,
+                    model=model,
+                    task_type=task_type,
+                    success=success,
+                    latency_ms=latency_ms,
+                    error_message=error_message,
+                    request_payload_sanitized=request_payload_sanitized,
+                    response_payload_sanitized=response_payload_sanitized,
+                )
+                self.session.add(log)
+                self.session.flush()
         except Exception as exc:
             logger.warning("Failed to log provider usage: %s", type(exc).__name__)
-            if self.session:
-                self.session.rollback()
 
     def get_availability_status(self) -> dict[str, bool]:
         return {
