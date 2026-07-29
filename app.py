@@ -25,6 +25,7 @@ from ui.dashboard import render_dashboard
 from ui.exports import render_exports
 from ui.layout import render_sidebar, render_topbar
 from ui.navigation import init_navigation, permission_for_label
+from ui.operations import render_operations
 from ui.provider_settings import render_provider_settings
 from ui.publish_center import render_publish_center
 from ui.publishing_settings import render_publishing_settings
@@ -113,6 +114,8 @@ def _render_page(session, page: str, user) -> None:
         render_brand_settings(session)
     elif page == "Exports":
         render_exports(session)
+    elif page == "Operations":
+        render_operations(session, user)
     elif page == "User Management":
         render_user_management(session, user)
     elif page == "Security":
