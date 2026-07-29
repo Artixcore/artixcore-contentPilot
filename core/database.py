@@ -17,8 +17,9 @@ from core.migrations import run_migrations
 from core.models import DEFAULT_BRAND, Base, BrandProfile
 from core.retries import retry_on_sqlite_locked
 
-# Importing registers security, tenancy, and operations tables on Base.metadata.
+# Importing registers security, tenancy, operations, and product tables on Base.metadata.
 import core.operations_models  # noqa: F401,E402
+import core.product_models  # noqa: F401,E402
 import core.security_models  # noqa: F401,E402
 import core.tenant_models  # noqa: F401,E402
 from core.tenant_runtime import bind_workspace as set_session_workspace
