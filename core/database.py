@@ -1,4 +1,6 @@
-"""Database initialization and session management."""
+"""Database initialization, secure engine configuration, and session management."""
+
+from __future__ import annotations
 
 import os
 from contextlib import contextmanager
@@ -15,6 +17,9 @@ from core.migrations import run_migrations
 from core.models import DEFAULT_BRAND, Base, BrandProfile
 from core.retries import retry_on_sqlite_locked
 
+# Importing registers identity, session, audit, and credential tables on Base.metadata.
+import core.security_models  # noqa: F401,E402
+
 load_dotenv()
 
 logger = get_logger(__name__)
@@ -24,6 +29,14 @@ DATABASE_TIMEOUT_SECONDS = int(os.getenv("DATABASE_TIMEOUT_SECONDS", "30"))
 
 _engine = None
 _SessionLocal = None
+
+
+def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return min(max(value, minimum), maximum)
 
 
 def _ensure_data_dir() -> None:
@@ -38,14 +51,29 @@ def get_engine():
     global _engine
     if _engine is None:
         _ensure_data_dir()
-        connect_args = {}
-        if DATABASE_URL.startswith("sqlite"):
+        is_sqlite = DATABASE_URL.startswith("sqlite")
+        connect_args: dict = {}
+        engine_kwargs: dict = {
+            "pool_pre_ping": True,
+            "hide_parameters": True,
+        }
+        if is_sqlite:
             connect_args["check_same_thread"] = False
             connect_args["timeout"] = DATABASE_TIMEOUT_SECONDS
+        else:
+            connect_args["connect_timeout"] = DATABASE_TIMEOUT_SECONDS
+            connect_args["application_name"] = "artixcore-contentpilot"
+            engine_kwargs.update(
+                {
+                    "pool_size": _bounded_int("DATABASE_POOL_SIZE", 5, 1, 50),
+                    "max_overflow": _bounded_int("DATABASE_MAX_OVERFLOW", 10, 0, 100),
+                    "pool_recycle": _bounded_int("DATABASE_POOL_RECYCLE_SECONDS", 1_800, 60, 86_400),
+                }
+            )
         _engine = create_engine(
             DATABASE_URL,
             connect_args=connect_args,
-            pool_pre_ping=True,
+            **engine_kwargs,
         )
     return _engine
 
@@ -53,7 +81,12 @@ def get_engine():
 def get_session_factory():
     global _SessionLocal
     if _SessionLocal is None:
-        _SessionLocal = sessionmaker(bind=get_engine(), autoflush=False, autocommit=False)
+        _SessionLocal = sessionmaker(
+            bind=get_engine(),
+            autoflush=False,
+            autocommit=False,
+            expire_on_commit=False,
+        )
     return _SessionLocal
 
 
@@ -76,7 +109,7 @@ def session_scope():
 
 @retry_on_sqlite_locked()
 def init_db() -> None:
-    """Initialize database with migrations."""
+    """Initialize database with safe migrations."""
     try:
         engine = get_engine()
         run_migrations(engine)
@@ -88,14 +121,16 @@ def init_db() -> None:
         raise DatabaseError(
             "Database is currently unavailable.",
             reason=str(exc),
-            user_action="Please check local database file permissions or restart the app.",
+            user_action="Check database connectivity, credentials, permissions, and TLS settings.",
             original_exception=exc,
         ) from exc
 
 
 def reset_engine(database_url: str | None = None) -> None:
-    """Reset engine (used in tests)."""
+    """Reset engine, primarily for isolated tests."""
     global _engine, _SessionLocal
+    if _engine is not None:
+        _engine.dispose()
     _engine = None
     _SessionLocal = None
     if database_url is not None:
@@ -105,7 +140,7 @@ def reset_engine(database_url: str | None = None) -> None:
 
 
 def check_database_health() -> dict:
-    """Check database reachability and schema."""
+    """Check database reachability and required schema without disclosing credentials."""
     try:
         engine = get_engine()
         with engine.connect() as conn:
@@ -121,7 +156,7 @@ def check_database_health() -> dict:
             }
         return {"healthy": True, "message": "Database is reachable and schema is valid."}
     except OperationalError as exc:
-        return {"healthy": False, "message": f"Database locked or unavailable: {type(exc).__name__}"}
+        return {"healthy": False, "message": f"Database unavailable: {type(exc).__name__}"}
     except Exception as exc:
         return {"healthy": False, "message": f"Database check failed: {type(exc).__name__}"}
 
