@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from core.chat_database import seed_default_chatbot_settings
 from core.database import get_session, init_db, seed_default_brand_profile
+from core.error_handler import handle_exception
 from ui.ai_workspace import render_ai_workspace
 from ui.approvals import render_approvals
 from ui.brand_settings import render_brand_settings
@@ -46,6 +47,17 @@ def start_telegram_controller():
 
     start_telegram_polling()
     return True
+
+
+def _render_error(exc: BaseException) -> None:
+    """Render a sanitized error alert without leaking internal exception details."""
+    error = handle_exception(exc, context="streamlit_page")
+    st.error(error["message"])
+    st.caption(f"Error code: {error['error_code']}")
+    if error.get("user_action"):
+        st.info(error["user_action"])
+    if error.get("retryable"):
+        st.warning("This failure may be temporary. Please retry the action.")
 
 
 def main() -> None:
@@ -94,8 +106,8 @@ def main() -> None:
         else:
             render_dashboard(session)
     except Exception as exc:
-        st.error("This page could not be loaded.")
-        st.caption(str(exc))
+        session.rollback()
+        _render_error(exc)
     finally:
         session.close()
 
