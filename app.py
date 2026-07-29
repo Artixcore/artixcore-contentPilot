@@ -25,6 +25,7 @@ from ui.dashboard import render_dashboard
 from ui.exports import render_exports
 from ui.layout import render_sidebar, render_topbar
 from ui.navigation import init_navigation, permission_for_label
+from ui.notification_center import render_notification_center
 from ui.operations import render_operations
 from ui.provider_settings import render_provider_settings
 from ui.publish_center import render_publish_center
@@ -92,6 +93,8 @@ def _render_page(session, page: str, user) -> None:
 
     if page == "Dashboard":
         render_dashboard(session)
+    elif page == "Notifications":
+        render_notification_center(session, user)
     elif page == "AI Workspace":
         render_ai_workspace(session)
     elif page == "Create Post":
