@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from core.audit import log_audit_event
@@ -16,38 +16,22 @@ from core.errors import ValidationAppError
 from core.notifications import create_notification
 from core.product_models import LeadRecord
 from core.security_models import UserAccount
+from core.tenant_models import WorkspaceMembership
 from core.tenancy import WorkspaceContext, require_workspace_permission
 
-_LEAD_STATUSES = frozenset({"new", "qualified", "contacted", "proposal", "won", "lost", "spam", "archived"})
-_PRIORITIES = frozenset({"low", "medium", "high", "urgent"})
+LEAD_STATUSES = frozenset(
+    {"new", "qualified", "contacted", "proposal", "won", "lost", "spam", "archived"}
+)
+LEAD_PRIORITIES = frozenset({"low", "medium", "high", "urgent"})
 _SOURCE_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,99}$")
 _PHONE_RE = re.compile(r"^[0-9+() .-]{6,64}$")
-
 _ENTERPRISE_TERMS = {
-    "enterprise",
-    "company",
-    "team",
-    "employees",
-    "organization",
-    "agency",
-    "saas",
-    "platform",
-    "multiple stores",
-    "multi vendor",
+    "enterprise", "company", "team", "employees", "organization", "agency",
+    "saas", "platform", "multiple stores", "multi vendor",
 }
 _BUYING_TERMS = {
-    "budget",
-    "quote",
-    "proposal",
-    "price",
-    "cost",
-    "hire",
-    "build",
-    "need",
-    "launch",
-    "contract",
-    "timeline",
-    "deadline",
+    "budget", "quote", "proposal", "price", "cost", "hire", "build", "need",
+    "launch", "contract", "timeline", "deadline",
 }
 _URGENCY_TERMS = {"urgent", "asap", "immediately", "this week", "today", "deadline"}
 _SUPPORT_TERMS = {"bug", "broken", "error", "issue", "support", "refund", "complaint"}
@@ -63,7 +47,9 @@ def _clean_text(value: object, *, field: str, minimum: int = 0, maximum: int = 2
 
 def _safe_json(value: Any, *, field: str, maximum: int = 20_000) -> str:
     try:
-        serialized = json.dumps(value if value is not None else {}, ensure_ascii=False, separators=(",", ":"))
+        serialized = json.dumps(
+            value if value is not None else {}, ensure_ascii=False, separators=(",", ":")
+        )
     except (TypeError, ValueError) as exc:
         raise ValidationAppError(f"{field} must be JSON serializable.") from exc
     if len(serialized) > maximum:
@@ -72,10 +58,11 @@ def _safe_json(value: Any, *, field: str, maximum: int = 20_000) -> str:
 
 
 def _normalize_source(value: object) -> str:
-    source = str(value or "").strip().lower()
-    source = re.sub(r"[^a-z0-9_.-]+", "-", source).strip("-")
+    source = re.sub(r"[^a-z0-9_.-]+", "-", str(value or "").strip().lower()).strip("-")
     if not _SOURCE_RE.fullmatch(source):
-        raise ValidationAppError("Lead source must contain lowercase letters, numbers, dots, hyphens, or underscores.")
+        raise ValidationAppError(
+            "Lead source must contain lowercase letters, numbers, dots, hyphens, or underscores."
+        )
     return source
 
 
@@ -89,29 +76,20 @@ def _normalize_phone(value: object | None) -> str | None:
 
 
 def classify_and_score(
-    *,
-    message: str,
-    email: str | None,
-    phone: str | None,
-    company: str | None,
+    *, message: str, email: str | None, phone: str | None, company: str | None
 ) -> tuple[str, str, int, list[str]]:
     """Return classification, priority, score, and evidence tags without using AI."""
     haystack = " ".join(filter(None, [message, company])).casefold()
     tags: list[str] = []
     score = 10
-
     if any(term in haystack for term in _SPAM_TERMS):
         return "spam", "low", 0, ["spam_pattern"]
-    if any(term in haystack for term in _SUPPORT_TERMS):
+    classification = "support" if any(term in haystack for term in _SUPPORT_TERMS) else "sales"
+    if classification == "support":
         tags.append("support_signal")
-        classification = "support"
-    else:
-        classification = "sales"
-
     enterprise_hits = sum(term in haystack for term in _ENTERPRISE_TERMS)
     buying_hits = sum(term in haystack for term in _BUYING_TERMS)
     urgency_hits = sum(term in haystack for term in _URGENCY_TERMS)
-
     if email:
         score += 15
         tags.append("email_present")
@@ -133,16 +111,8 @@ def classify_and_score(
     if len(message.strip()) >= 120:
         score += 5
         tags.append("detailed_request")
-
     score = min(max(score, 0), 100)
-    if score >= 80 or urgency_hits >= 2:
-        priority = "urgent"
-    elif score >= 60:
-        priority = "high"
-    elif score >= 30:
-        priority = "medium"
-    else:
-        priority = "low"
+    priority = "urgent" if score >= 80 or urgency_hits >= 2 else "high" if score >= 60 else "medium" if score >= 30 else "low"
     if classification == "support" and score < 60:
         priority = "medium"
     return classification, priority, score, sorted(set(tags))
@@ -177,29 +147,27 @@ def create_lead(
     if safe_external_id:
         existing = session.scalar(
             select(LeadRecord).where(
-                LeadRecord.source == safe_source,
-                LeadRecord.external_id == safe_external_id,
+                LeadRecord.source == safe_source, LeadRecord.external_id == safe_external_id
             )
         )
         if existing:
             return existing
     elif safe_email:
         existing = session.scalar(
-            select(LeadRecord).where(
+            select(LeadRecord)
+            .where(
                 func.lower(LeadRecord.email) == safe_email,
                 LeadRecord.status.notin_(("lost", "spam", "archived")),
-            ).order_by(LeadRecord.created_at.desc())
+            )
+            .order_by(LeadRecord.created_at.desc())
         )
         if existing and existing.message == safe_message:
             return existing
 
     classification, priority, score, evidence = classify_and_score(
-        message=safe_message,
-        email=safe_email,
-        phone=safe_phone,
-        company=safe_company,
+        message=safe_message, email=safe_email, phone=safe_phone, company=safe_company
     )
-    status = "spam" if classification == "spam" else ("qualified" if score >= 60 else "new")
+    status = "spam" if classification == "spam" else "qualified" if score >= 60 else "new"
     model = LeadRecord(
         source=safe_source,
         external_id=safe_external_id,
@@ -262,12 +230,12 @@ def list_leads(
     query = select(LeadRecord)
     if status and status != "all":
         safe_status = str(status).strip().lower()
-        if safe_status not in _LEAD_STATUSES:
+        if safe_status not in LEAD_STATUSES:
             raise ValidationAppError("Lead status filter is invalid.")
         query = query.where(LeadRecord.status == safe_status)
     if priority and priority != "all":
         safe_priority = str(priority).strip().lower()
-        if safe_priority not in _PRIORITIES:
+        if safe_priority not in LEAD_PRIORITIES:
             raise ValidationAppError("Lead priority filter is invalid.")
         query = query.where(LeadRecord.priority == safe_priority)
     if assigned_user_id is not None:
@@ -291,6 +259,24 @@ def list_leads(
     )
 
 
+def list_assignable_members(
+    session: Session, *, context: WorkspaceContext
+) -> list[tuple[WorkspaceMembership, UserAccount]]:
+    require_workspace_permission(context, "workspace:read")
+    return list(
+        session.execute(
+            select(WorkspaceMembership, UserAccount)
+            .join(UserAccount, UserAccount.id == WorkspaceMembership.user_id)
+            .where(
+                WorkspaceMembership.workspace_id == context.workspace_id,
+                WorkspaceMembership.status == "active",
+                UserAccount.is_active.is_(True),
+            )
+            .order_by(UserAccount.display_name.asc())
+        ).all()
+    )
+
+
 def update_lead(
     session: Session,
     *,
@@ -304,14 +290,21 @@ def update_lead(
     require_workspace_permission(context, "content:write")
     safe_status = str(status or "").strip().lower()
     safe_priority = str(priority or "").strip().lower()
-    if safe_status not in _LEAD_STATUSES:
+    if safe_status not in LEAD_STATUSES:
         raise ValidationAppError("Select a valid lead status.")
-    if safe_priority not in _PRIORITIES:
+    if safe_priority not in LEAD_PRIORITIES:
         raise ValidationAppError("Select a valid lead priority.")
     if assigned_user_id is not None:
+        membership = session.scalar(
+            select(WorkspaceMembership).where(
+                WorkspaceMembership.workspace_id == context.workspace_id,
+                WorkspaceMembership.user_id == int(assigned_user_id),
+                WorkspaceMembership.status == "active",
+            )
+        )
         account = session.get(UserAccount, int(assigned_user_id))
-        if account is None or not account.is_active:
-            raise ValidationAppError("Assigned user was not found or is inactive.")
+        if membership is None or account is None or not account.is_active:
+            raise ValidationAppError("Assigned user is not an active member of this workspace.")
     lead = session.get(LeadRecord, int(lead_id))
     if lead is None:
         raise ValidationAppError("Lead was not found.")
