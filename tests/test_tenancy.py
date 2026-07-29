@@ -102,6 +102,7 @@ def test_cross_workspace_update_is_blocked(db_session):
     db_session.info["tenant_bypass"] = False
     bind_workspace(db_session, second)
     loaded.topic = "Forbidden cross-tenant change"
+    db_session.add(loaded)
     with pytest.raises(WorkspaceAccessError):
         db_session.commit()
     db_session.rollback()
