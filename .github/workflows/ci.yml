@@ -2,14 +2,105 @@ name: CI
 
 on:
   pull_request:
-  push:
     branches: [master]
+  push:
+    branches:
+      - master
+      - "agent/**"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test-and-security:
+  test:
+    name: Python ${{ matrix.python-version }} tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    env:
+      APP_ENV: test
+      APP_DEBUG: "false"
+      ALERTS_ENABLED: "false"
+      DATABASE_URL: sqlite:///:memory:
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install project and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --requirement requirements.txt
+          python -m pip install ruff
+
+      - name: Verify dependency consistency
+        run: python -m pip check
+
+      - name: Compile Python sources
+        run: python -m compileall -q app.py core chatbot providers publishers ui tests scripts
+
+      - name: Check likely runtime errors
+        run: ruff check app.py core chatbot providers publishers ui tests scripts --select E9,F63,F7,F82
+
+      - name: Run test suite
+        run: pytest -q --maxfail=1
+
+  postgres:
+    name: PostgreSQL integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: contentpilot_test
+          POSTGRES_USER: contentpilot
+          POSTGRES_PASSWORD: contentpilot_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U contentpilot -d contentpilot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      APP_ENV: test
+      APP_DEBUG: "false"
+      ALERTS_ENABLED: "false"
+      DATABASE_URL: postgresql+psycopg://contentpilot:contentpilot_ci_password@127.0.0.1:5432/contentpilot_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --requirement requirements.txt
+
+      - name: Initialize and verify PostgreSQL schema
+        run: python scripts/ci_database_smoke.py
+
+  security:
+    name: Security scans
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -24,43 +115,71 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
 
       - name: Install dependencies and scanners
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install bandit pip-audit ruff
+          python -m pip install --requirement requirements.txt
+          python -m pip install bandit pip-audit
 
-      - name: Verify dependency consistency
-        run: python -m pip check
-
-      - name: Compile Python sources
-        run: python -m compileall -q app.py core chatbot providers publishers ui tests
-
-      - name: Lint security-critical modules
-        run: >-
-          ruff check
-          app.py
-          core/agent.py
-          core/alerts.py
-          core/config_validation.py
-          core/error_handler.py
-          core/logging_config.py
-          core/schemas.py
-          core/validation.py
-          tests/test_config_validation.py
-          tests/test_error_handler.py
-          tests/test_logging_security.py
-          tests/test_security_hardening.py
-          tests/test_validation.py
-
-      - name: Run test suite
-        run: pytest -q
-
-      - name: Scan Python code for medium and high severity issues
+      - name: Scan Python code
         run: bandit -r app.py core chatbot providers publishers ui -x tests -ll --skip B101
 
       - name: Audit Python dependencies
-        run: pip-audit -r requirements.txt --strict
+        run: pip-audit --strict
+
+  container:
+    name: Container build and smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [test, postgres, security]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: contentpilot:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start hardened container
+        run: |
+          docker run --detach \
+            --name contentpilot-ci \
+            --publish 127.0.0.1:8501:8501 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --env APP_ENV=test \
+            --env APP_DEBUG=false \
+            --env ALERTS_ENABLED=false \
+            --env DATABASE_URL=sqlite:////tmp/contentpilot-ci.db \
+            contentpilot:ci
+
+      - name: Verify application health
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:8501/_stcore/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs contentpilot-ci
+          exit 1
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker logs contentpilot-ci || true
+
+      - name: Stop test container
+        if: always()
+        run: docker rm --force contentpilot-ci || true
