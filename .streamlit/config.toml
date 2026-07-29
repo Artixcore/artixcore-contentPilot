@@ -1,0 +1,15 @@
+[server]
+headless = true
+enableCORS = true
+enableXsrfProtection = true
+maxUploadSize = 20
+maxMessageSize = 50
+
+[browser]
+gatherUsageStats = false
+
+[client]
+showErrorDetails = false
+
+[runner]
+fastReruns = true
